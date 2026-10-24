@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
+import ctypes
+import logging
 from enum import Enum, auto
 
 from pynput import keyboard
 from PySide6.QtCore import QMetaObject, QObject, Qt, Signal, Slot
+
+
+logger = logging.getLogger(__name__)
+
+try:
+    _get_async_key_state = ctypes.windll.user32.GetAsyncKeyState
+    _vk_key_scan = ctypes.windll.user32.VkKeyScanW
+    _vk_key_scan.restype = ctypes.c_short
+except AttributeError:  # not Windows
+    _get_async_key_state = None
+    _vk_key_scan = None
+
+# Virtual-key codes to ask Windows about for the merged modifier names.
+_VK_SHIFT = 0x10
+_VK_MENU = 0x12  # either Alt
 
 
 class _HotkeyState(Enum):
@@ -49,11 +66,32 @@ def _normalize_key(key: keyboard.Key | keyboard.KeyCode | None) -> str | None:
             return "win"
         return str(key)
 
-    # keyboard.KeyCode — regular character keys.
+    # keyboard.KeyCode — regular character keys. Prefer the virtual-key
+    # code: the char changes with Shift, so "Shift down, I down, Shift up,
+    # i up" would otherwise leave "I" held forever and block the hotkey.
+    vk = getattr(key, "vk", None)
     char = getattr(key, "char", None)
+    if vk is None and char and _vk_key_scan is not None:
+        # Unicode-packet events (some IMEs, injected input) carry only a char.
+        scanned = _vk_key_scan(char)
+        if scanned != -1:
+            vk = scanned & 0xFF
+    if vk is not None:
+        return f"vk{vk}"
     if char:
-        return char
+        return char.lower()
     return str(key)
+
+
+def _key_vk(name: str, key: keyboard.Key | keyboard.KeyCode) -> int | None:
+    """Virtual-key code for GetAsyncKeyState, matching _normalize_key's merging."""
+    if name == "alt":
+        return _VK_MENU
+    if name == "shift":
+        return _VK_SHIFT
+    if isinstance(key, keyboard.Key):
+        return getattr(key.value, "vk", None)
+    return getattr(key, "vk", None)
 
 
 class HotkeyMonitor(QObject):
@@ -91,6 +129,7 @@ class HotkeyMonitor(QObject):
             )
         self._binding = binding
         self._held: set[str] = set()
+        self._held_vks: dict[str, int] = {}
         self._state: _HotkeyState = _HotkeyState.UNARMED
         self._listener: keyboard.Listener | None = None
 
@@ -113,6 +152,7 @@ class HotkeyMonitor(QObject):
         if listener is not None:
             listener.stop()
         self._held.clear()
+        self._held_vks.clear()
         self._state = _HotkeyState.UNARMED
 
     # ------------------------------------------------------------------
@@ -138,8 +178,13 @@ class HotkeyMonitor(QObject):
         self._held.add(name)
         if already_held:
             return
+        vk = _key_vk(name, key)
+        if vk is not None:
+            self._held_vks[name] = vk
+        logger.debug("key down %s (state=%s, held=%s)", name, self._state.name, sorted(self._held))
 
         if self._state == _HotkeyState.UNARMED:
+            self._prune_released_keys(keep=name)
             if self._is_armed():
                 self._state = _HotkeyState.ARMED
                 self._post_main("_emit_pressed")
@@ -165,6 +210,8 @@ class HotkeyMonitor(QObject):
         if name is None:
             return
         self._held.discard(name)
+        self._held_vks.pop(name, None)
+        logger.debug("key up %s (state=%s, held=%s)", name, self._state.name, sorted(self._held))
 
         if self._state == _HotkeyState.ARMED:
             # Releasing any of the required modifiers ends the press.
@@ -178,9 +225,31 @@ class HotkeyMonitor(QObject):
             # allowed. This prevents a partial release from sliding
             # straight back into ARMED without the user intending a
             # new press.
+            self._prune_released_keys()
             if not self._held:
                 self._state = _HotkeyState.UNARMED
             return
+
+    def _prune_released_keys(self, keep: str | None = None) -> None:
+        """Drop held keys whose key-up we never saw.
+
+        Releases can go missing (an elevated window had focus, the
+        workstation was locked mid-chord), and one phantom key blocks the
+        strict "nothing else held" check forever. Ask Windows which keys
+        are physically down. ``keep`` is the key being pressed right now:
+        a low-level hook runs before Windows updates its key state, so it
+        would look released.
+        """
+        if _get_async_key_state is None:
+            return
+        for name in list(self._held):
+            vk = self._held_vks.get(name)
+            if name == keep or vk is None:
+                continue
+            if not _get_async_key_state(vk) & 0x8000:
+                logger.debug("dropping stale held key %s", name)
+                self._held.discard(name)
+                self._held_vks.pop(name, None)
 
     # ------------------------------------------------------------------
     # arming predicates
