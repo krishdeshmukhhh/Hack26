@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from PySide6.QtCore import QByteArray, QObject, Signal
 
 from curio.active_window import get_foreground_window_title
+from curio.clients.kokoro_tts_client import KokoroTTSClient
 from curio.clients.llm_client import LLMClient
 from curio.clients.openai_llm_client import OpenAICompatLLMClient
 from curio.clients.system_tts_client import SystemTTSClient
@@ -82,7 +83,7 @@ class CompanionManager(QObject):
         hotkey: HotkeyMonitor,
         transcription: TranscriptionClient | WhisperTranscriptionClient,
         llm: LLMClient | OpenAICompatLLMClient,
-        tts: TTSClient | SystemTTSClient,
+        tts: TTSClient | SystemTTSClient | KokoroTTSClient,
         screen_capture_fn: Callable[[], list[ScreenshotImage]],
         panel_visibility_controller: CaptureVisibilityController,
         parent: QObject | None = None,
