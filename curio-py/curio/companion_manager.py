@@ -339,14 +339,23 @@ class CompanionManager(QObject):
             self._speak_task.cancel()
 
     def _update_walkthrough(self, step: StepTag | None) -> None:
-        """Called once per answer with the answer's [STEP:k/n] tag, if any."""
-        if step is not None and step.has_more:
+        """Called once per answer with the answer's [STEP:k/n] tag, if any.
+
+        Any STEP tag keeps the walkthrough going: after the user's click we
+        ask for the next step, and it ends when the model answers without a
+        tag (task finished). The model's step total is unreliable (the 30B
+        model often says 1/1 for multi-click tasks), so it's display-only.
+        """
+        if step is not None:
             self._walkthrough = step
             self._click_watcher.start()
             self._walkthrough_timeout.start()
-            logger.info("walkthrough: waiting on step %d of %d", step.index, step.total)
+            logger.info(
+                "walkthrough: waiting on step %d (model estimate: %d)", step.index, step.total
+            )
         else:
-            # Final step given, or the model stopped guiding.
+            if self._walkthrough is not None:
+                logger.info("walkthrough: model says the task is finished")
             self._end_walkthrough()
 
     def _end_walkthrough(self) -> None:
@@ -558,7 +567,7 @@ class CompanionManager(QObject):
                         self._panel_visibility_controller.fly_to(
                             coords[0],
                             coords[1],
-                            hold=step is not None and step.has_more,
+                            hold=step is not None,
                             step=(step.index, step.total) if step is not None else None,
                         )
                         logger.info(

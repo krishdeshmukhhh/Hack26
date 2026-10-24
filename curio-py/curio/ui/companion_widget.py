@@ -46,6 +46,7 @@ from curio.ui.pointer_bubble import (
     PointerBubble,
     friendly_error,
     random_pointer_phrase,
+    step_caption,
 )
 from curio.ui.window_effects import make_overlay_window
 
@@ -261,8 +262,7 @@ class CompanionWidget(QWidget):
         self._point_timer.stop()
         self.bubble.hide_now()
         self._hold = hold
-        phrase = random_pointer_phrase()
-        self._caption = f"{phrase} ({step[0]}/{step[1]})" if step else phrase
+        self._caption = step_caption(random_pointer_phrase(), step)
 
         dest = landing_point((x, y), _screen_rect(QPointF(x, y)))
         self._mode = _Mode.FLYING

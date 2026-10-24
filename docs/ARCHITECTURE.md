@@ -77,17 +77,21 @@ answer with `[STEP:k/N]` next to its POINT tag.
 
 1. `parse_step_tag` strips the STEP tag, then `parse_point_tag` the POINT tag.
    The companion flies there with `hold=True` and a "(k/N)" suffix on its pill.
-2. If `k < N`, the manager stores the step, starts `ClickWatcher`, and after
-   speaking enters **GUIDING**: the companion stays on the target.
+2. Any STEP tag (whatever `N` says) makes the manager store the step, start
+   `ClickWatcher`, and after speaking enter **GUIDING**: the companion stays
+   on the target. `N` is display-only, because the model's totals are
+   unreliable (it often says 1/1 for multi-click tasks).
 3. The next left click → `PROCESSING` → wait 0.8 s for the UI to react →
    a normal turn with the text "i did step k. what's next?" and a **fresh
    screenshot**, so each step is grounded in the current screen.
-4. It ends on the final step (`k == N`), an answer without a STEP tag,
-   Esc, Ctrl+Alt, an error, or 2 minutes without a click.
+4. It ends on an answer without a STEP tag (the model says the task is
+   finished), Esc, Ctrl+Alt, an error, or 2 minutes without a click.
 
 The 30B model often skips the STEP tag if it's only described in the system
-prompt. So requests for how-to questions (`is_howto_question`) and every
-continuation get a one-line reminder (`walkthrough_reminder`) appended. The
+prompt. So requests for how-to questions and every continuation get a
+one-line reminder (`walkthrough_reminder`) appended. `is_howto_question`
+matches "how do I…" phrasings, and also task requests whose "how" Whisper
+dropped ("do I enable light mode…", "I want to export…"). The
 reminder goes into that request only, not into the stored history. In live
 tests this took first-step tagging from 1 in 3 runs to 4 in 4.
 

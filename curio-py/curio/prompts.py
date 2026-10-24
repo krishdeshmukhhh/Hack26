@@ -74,14 +74,28 @@ def _base_prompt(point_coords: str) -> str:
 # question than when it's only in the long system prompt.
 _HOWTO_RE = re.compile(
     r"\b(how (do|can|would|should|to) (i|we|you)\b|how to\b|walk me through|show me how"
-    r"|steps? (to|for)\b|guide me|help me (set|make|create|change|find|add|turn|install"
-    r"|export|open|enable|disable|connect|move|delete|rename|save|share|upload))",
+    r"|steps? (to|for)\b|guide me)",
+    re.IGNORECASE,
+)
+# Speech-to-text often drops the leading "how" ("do i enable light mode..."),
+# so also accept a request-like opening followed by a task verb.
+_TASK_OPENING_RE = re.compile(
+    r"^\W*(do|can|could|would|should) (i|we|you)\b|\b(i want to|i need to|i'd like to"
+    r"|help me|let me)\b|^\W*where do (i|we)\b",
+    re.IGNORECASE,
+)
+_TASK_VERB_RE = re.compile(
+    r"\b(change|enable|disable|turn (on|off)|switch|set( up)?|install|uninstall|open|create"
+    r"|make|add|remove|delete|rename|move|save|export|import|share|upload|download|connect"
+    r"|configure|customi[sz]e|update|get to|go to|find|use|start|stop|edit|insert|apply)\b",
     re.IGNORECASE,
 )
 
 
 def is_howto_question(text: str) -> bool:
-    return bool(_HOWTO_RE.search(text))
+    if _HOWTO_RE.search(text):
+        return True
+    return bool(_TASK_OPENING_RE.search(text) and _TASK_VERB_RE.search(text))
 
 
 def walkthrough_reminder(next_step: int | None = None) -> str:
@@ -94,7 +108,7 @@ def walkthrough_reminder(next_step: int | None = None) -> str:
         return (
             "(guide me one step at a time. each click or menu choice is its own step. "
             "give only the first step, point at it, and end with [STEP:1/N], where N is "
-            "the total number of steps. use [STEP:1/1] if it really is one click.)"
+            "your best guess at the total number of steps.)"
         )
     return (
         f"(look at the new screen. give only step {next_step}, point at it, and end with "

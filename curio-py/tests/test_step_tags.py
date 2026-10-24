@@ -44,8 +44,12 @@ def test_howto_detection() -> None:
     from curio.prompts import is_howto_question
 
     for q in ["how do i change my wallpaper", "How can I export this?", "walk me through it",
-              "show me how to add a layer", "help me set up a new event", "steps to rename a file"]:
+              "show me how to add a layer", "help me set up a new event", "steps to rename a file",
+              # Whisper dropped the "how":
+              "Do I enable light mode on VS Code?", "can i turn off notifications",
+              "i want to export this as a pdf", "where do i change the font size"]:
         assert is_howto_question(q), q
     for q in ["what is html", "what's the capital of france", "where is the save button",
-              "why is this red", "however you like"]:
+              "why is this red", "however you like", "what's on my screen right now?",
+              "do i have any unread emails", "can you see my desktop"]:
         assert not is_howto_question(q), q
