@@ -1,0 +1,3 @@
+# Curio
+
+Desktop assistant project.
