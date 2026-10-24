@@ -73,27 +73,43 @@ Added `backend = "local"`:
   replacing the stock macOS Curio that was there. The previous commit is
   kept in history.
 - Added server scripts (`server/`) and these docs.
+  - The scripts are generic and read per-machine settings from `curio.env`.
+  - They were tested locally against a fake `nvidia-smi`. That test found two bugs: `gpu_status.sh` silently exiting when a process had just ended, and a CRLF issue.
+
+### Upgrades
+- **Kokoro voice** (`tts_engine = "kokoro"`, now the default).
+  - Speech starts ~0.4 s after the answer arrives, because it's spoken sentence by sentence.
+  - Default onnxruntime settings were 6–9× slower once other threads were busy, so it now uses 8 threads with spinning off (0.23× real time on the laptop CPU).
+  - Falls back to the Windows voice if Kokoro can't load.
+- **Whisper `small.en`** is now the default (was `base.en`).
+- **Speech bubble** next to the triangle. The original Curio had one; the Windows port never built it.
+  - Streams the answer, keeping the newest lines.
+  - Titles the pointing target and walkthrough step.
+  - Shows errors in plain words, including config errors at startup, which used to fail silently.
+  - Checked visually with screenshots.
+- **Guided walkthroughs**: one step at a time, a fresh screenshot after each click, Esc to stop. See [ARCHITECTURE.md](ARCHITECTURE.md#guided-walkthroughs).
+  - Live testing showed the 30B model mostly ignores the step format when it's only in the system prompt. A short reminder appended to how-to requests fixed it: 4 of 4 runs tagged correctly, and ordinary questions stayed untagged.
+  - Not yet tried by hand through a full real walkthrough.
 
 ## Current status
 
-Working end to end: voice → Whisper → Qwen3-VL on the H100 → Windows voice +
-pointing, with no API keys.
+Working end to end, with no API keys: voice → Whisper → Qwen3-VL on the H100
+→ Kokoro voice + pointing + speech bubble. Guided walkthroughs are built and
+unit-tested, and the model follows the format live, but nobody has tried a
+full walkthrough by hand yet.
 
 ## Next up
 
 In priority order:
-1. **Text bubble** next to the cursor showing the answer as it streams, plus a
-   label at the pointing target. The original Curio had one; the Windows port
-   never built it.
-2. **Guided multi-step walkthroughs:** one step at a time, a fresh screenshot
-   after each of your clicks, and the cursor flying to each step.
-3. **Kokoro voice** (local, much more natural than the Windows voices), spoken
-   sentence by sentence so it starts sooner.
-4. **Whisper `small.en`** by default for better accuracy.
-
-Later: one-click startup script (tunnel + app), on-screen error messages,
-higher-resolution screenshots for small UI elements, and a knowledge base for
-the demo app.
+1. **Try a full walkthrough by hand** in the demo app, and tune the prompt
+   from what goes wrong.
+2. **One-click startup** (`start.ps1`): open the tunnel, wait for the server,
+   launch Curio.
+3. **Sharper pointing:** screenshots are capped at 1280 px; Qwen3-VL can take
+   1920 px for small UI elements.
+4. **Knowledge base** for whatever app we demo.
+5. **Speak while the answer streams** instead of after it's complete, to save
+   another ~0.5 s.
 
 ## Known issues
 
@@ -101,3 +117,6 @@ the demo app.
 - **Config errors** only show in the log; the app looks normal but does nothing.
 - **Duplicate errors:** an LLM failure is reported twice (the client's signal and the manager's `except`).
 - **Shared GPUs:** our GPUs are shared and can be taken at any time; there's no automatic fallback.
+- **Walkthrough clicks:** any left click counts as "step done", including a click somewhere unrelated.
+- **Step counts:** the model sometimes underestimates the number of steps. When it says `[STEP:1/1]` for a multi-click task, the walkthrough ends early; asking "what's next?" continues it.
+- **Model quality:** the 30B model is sometimes sloppy about where things are (it called the centred Windows 11 Start button "bottom left"). Qwen3-VL-32B would be the upgrade when a full GPU is free.

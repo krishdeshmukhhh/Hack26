@@ -11,7 +11,7 @@ for how the pieces fit together see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 | Curio app (hotkey, mic, screenshots, cursor overlay) | Your Windows laptop | — |
 | Speech-to-text | Laptop CPU | Whisper via faster-whisper (`whisper_model`) |
 | Vision + answer | Lab GPU server, through an SSH tunnel | Qwen3-VL-30B-A3B-Instruct-FP8 via vLLM |
-| Voice | Laptop | Windows built-in voices, or Kokoro (`tts_engine`) |
+| Voice | Laptop CPU | Kokoro neural voice (`tts_engine = "kokoro"`), or the Windows voices (`"system"`) |
 
 No API keys are needed for any of these.
 
@@ -25,7 +25,9 @@ No API keys are needed for any of these.
    uv sync --extra local
    ```
 3. Run it once (`uv run python -m curio`), then quit from the tray icon. That
-   creates `%APPDATA%\Curio\config.toml`. Edit it:
+   creates `%APPDATA%\Curio\config.toml`. The first run also downloads
+   the Whisper model (~500 MB) and the Kokoro voice (~350 MB) in the
+   background, so give it a few minutes on first start. Edit the config:
    ```toml
    backend = "local"
 
@@ -34,6 +36,9 @@ No API keys are needed for any of these.
    llm_model = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"   # must match SERVED_MODEL_NAME on the server
    llm_api_key = "<contents of the server's api_key file>"
    point_coords = "norm1000"                         # Qwen3-VL's coordinate format
+   whisper_model = "small.en"                        # speech-to-text accuracy
+   tts_engine = "kokoro"                             # or "system" for Windows voices
+   tts_voice = ""                                    # kokoro: e.g. "af_heart", "am_michael", "bf_emma"
    ```
    Every option is documented in [`curio-py/config.example.toml`](../curio-py/config.example.toml).
 4. Install **FortiClient** for the OSU VPN.
@@ -105,10 +110,27 @@ A blue triangle appears next to your cursor and an icon in the system tray.
 1. Click on a normal window (not an admin PowerShell).
 2. **Hold Ctrl+Alt**; the triangle becomes a waveform.
 3. Ask your question out loud, then **release**.
-4. It answers out loud, and the triangle flies to whatever it's describing.
+4. A bubble next to the triangle says "thinking…", then shows the answer as
+   it's spoken. The triangle flies to whatever it's describing, and the
+   bubble's title names it.
 
-Tray menu → **History** shows what it heard and what it said. Press Ctrl+Alt
-while it's talking to interrupt.
+Press Ctrl+Alt while it's talking to interrupt. Tray menu → **History** has
+the full transcript.
+
+**Step-by-step walkthroughs.** Ask a how-to question, for example "how do I
+change my wallpaper?" or "walk me through exporting this video". Instead of
+listing every step, Curio gives **one step at a time**:
+
+1. It says step 1, flies to where you need to click, and the bubble shows
+   "step 1 of 4 · …".
+2. **Do the step** (click where it pointed). Your click tells Curio you're
+   done. It takes a fresh screenshot and tells you step 2, based on what's
+   on screen now.
+3. This repeats until the last step.
+
+Press **Esc** to stop a walkthrough, or Ctrl+Alt to ask something else. It
+also gives up after 2 minutes without a click. Any left click counts as
+"done", so avoid clicking elsewhere mid-walkthrough.
 
 ### 5. Stop everything
 
@@ -128,7 +150,10 @@ while it's talking to interrupt.
 | `bind: Address already in use` when opening the tunnel | Something on the laptop already uses 8000. Use `-L 8001:localhost:<PORT>` and set `llm_base_url = "http://localhost:8001/v1"`. |
 | It mishears you | Use a better Whisper model (`whisper_model = "small.en"`), check Windows → Privacy → Microphone, and make sure the right mic is the default. |
 | The cursor points at the wrong spot | Check `point_coords` matches the model (`norm1000` for Qwen3-VL). Run `./test_vision.sh` on the server: if it passes, the problem is on the laptop side. |
-| No sound | Check the volume and default output device. Windows voices live in Settings → Time & language → Speech. |
+| No sound | Check the volume and default output device. If Kokoro failed to load, the log says why and Curio uses the Windows voice instead. |
+| Voice sounds robotic | That's the Windows voice: Kokoro is off (`tts_engine = "system"`) or failed to load (see the log). |
+| Walkthrough stops after the first step | The model gave a one-step answer (`[STEP:1/1]`) or no step tag. Ask "what's next?" with Ctrl+Alt, or rephrase as "walk me through…". |
+| Bubble shows "something went wrong" | The message says what to check. It's also in the log. |
 
 Debug logging: set `log_level = "DEBUG"` in `config.toml`. **This also logs
 every key you press**, so set it back to `INFO` afterwards and clear the log.
