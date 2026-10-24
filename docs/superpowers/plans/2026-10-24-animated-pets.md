@@ -46,3 +46,15 @@ Ruling: Execute immediately under the user's explicit authorization; do not add 
 
 Verification: 138 tests passed; scoped Ruff passes; 24 actual Qt states rendered and inspected. Physical-desktop and frozen-build acceptance remain manual.
 Ruling: Added targeted CRLF normalization after original parser tests failed on Windows. Kept target marker at arrival, preserving existing pointing without an extra floating window.
+
+## Follow-up: whimsical pursuit (user authorized)
+- [x] Parallel motion task: finite non-restarting hesitation, bounded pursuit,
+  latest destination, eased arrival and hysteresis with deterministic tests.
+- [x] Parallel behavior task: profile delays/speeds, more noticeable idle play,
+  traversal hops, AI priority, sleep/wake and regression tests.
+- [x] Integration task: faster default sleep, explicit settings preserved,
+  actual widget timer tests, Qt snapshots and existing documentation updates.
+- [x] Verify complete suite on project Python 3.12.15: 156 pass; scoped lint clean.
+Read-only integration review found no important defects. Existing optional-action
+playback can lead its behavior clock by one timer tick; no new jump displacement
+or queued movement was introduced.

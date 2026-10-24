@@ -100,3 +100,8 @@ def test_inline_table_is_rejected_without_modification(tmp_path: Path):
     with pytest.raises(ValueError, match="inline"):
         save_pet_selection(path, "cat")
     assert path.read_bytes() == original
+
+
+def test_sleep_default_is_short_enough_to_notice_but_explicit_value_survives():
+    assert PetSettings().sleep_after_seconds == 45
+    assert PetSettings.from_dict({"sleep_after_seconds": 120}).sleep_after_seconds == 120

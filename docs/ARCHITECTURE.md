@@ -33,7 +33,7 @@ signals and methods in both backends.
 | `knowledge_base.py` | Per-app markdown docs chosen by the foreground window title. |
 | `ui/companion_widget.py` | Base Windows overlay, waveforms and triangle fallback. |
 | `ui/pet_widget.py` | Animated pet presentation and monitor placement. |
-| `pets.py`, `pet_config.py` | Sprite timing, behavior profiles and persisted preferences. |
+| `pets.py`, `pet_motion.py`, `pet_config.py` | Sprite timing, delayed pursuit, behavior profiles and persisted preferences. |
 | `ui/history_window.py`, `ui/tray_icon.py` | Transcript window and tray menu. |
 
 ### Backends (`backend` in config.toml)
@@ -89,6 +89,21 @@ audio devices, live servers and multi-monitor desktop behavior are not.
 The design and mappings were approved and implemented on
 `codex/animated-pet-design`. The details below record the design; actual status
 and verification limits are listed next.
+
+### Delayed pursuit refinement
+
+Following now behaves as a small character deciding to catch up, rather than an
+exponential cursor attachment. Profiles pair delay/speed: playful 0.4s/190px/s,
+reserved 0.6s/155px/s, relaxed 0.65s/135px/s, energetic 0.25s/230px/s. These are data
+settings shared by all species. The widget timer continues updating destinations
+while the pet hesitates, walks and hops; there are no queued movement commands.
+Idle variations are more frequent and new configurations sleep after 45 seconds.
+Explicit existing sleep settings are preserved. Sleep is entered only after arrival;
+optional play never wakes a sleeping pet, and user activity restores following.
+
+The refinement passes 156 tests on Python 3.12.15, including actual widget timer
+integration. The inspected Qt snapshots are in pet-review/delayed-pursuit-preview.png
+(with a shortened 10-second sleep threshold for the preview only).
 
 ### Implemented status
 
@@ -238,16 +253,30 @@ presentation response, not a security detector.
 
 Use one Qt update timer and monotonic elapsed time. Movement updates the latest
 cursor destination every tick, including while jumping; there is no destination
-queue or jump queue. Ground position uses time-based exponential smoothing
-(proposed 90 ms response constant), with faster convergence for large separation.
+queue or jump queue. Ground position uses PursuitMotion: a single profile-based
+reaction delay (0.25-0.65 seconds), then a profile walking speed (135-230 logical pixels/second). Distance beyond
+240 pixels increases desired speed up to a 10x distance boost. A five-second
+pursuit budget, including hesitation, can raise speed further for very large
+distances. Acceleration is at least 12x base speed per second; deceleration is
+20x. Remaining distance/time enforces progress after ramp-up, without overshoot.
+The budget does not restart as the destination changes. Cursor updates do not restart hesitation.
+The pet stops 16 pixels from its follow destination; a 12-pixel hysteresis prevents
+tiny cursor changes from dragging it around. POINT bypasses hesitation and uses
+a precise 0.5-pixel arrival radius. Reduced motion uses direct placement.
 Short travel walks; run may activate beyond 180 logical pixels. Facing follows
-horizontal movement with a small dead zone. Stationary means speed below 5 logical
-pixels/second for 250 ms; hysteresis prevents walk/idle flicker.
+horizontal movement with a small dead zone. The motion controller reports actual travel; while hesitating the pet remains
+idle rather than playing walking frames.
 
-Traversal hops require at least 120 logical pixels of remaining travel, a cooldown,
-and a profile-weighted random decision evaluated once per traversal opportunity,
-not every paint. They never reduce follow convergence or freeze the destination.
-If separation exceeds 240 logical pixels, prioritize catch-up and forbid new hops.
+Traversal hops require at least 100 logical pixels of remaining travel, actual movement, a cooldown,
+and a profile-weighted random decision at pursuit start or after another 160
+pixels of travel, not every paint. A failed roll does not suppress the entire chase. They never reduce follow convergence or freeze the destination.
+Long-distance catch-up can include hops; hopping never changes the ground pursuit
+trajectory or acceleration. Cooldowns prevent continuous jumping.
+PursuitMotion emits a one-tick just_arrived event after actual travel. A normal
+cursor arrival can trigger one jump using the selected pet's existing jump clip,
+with a separate cooldown of at least four seconds. This is suppressed for active
+AI/POINT, reduced motion, disabled jumps, missing clips or an already-playing
+optional action. Stationary ticks never retrigger it.
 Completing a hop cannot enqueue a second one. Idle play starts only after 5 seconds
 stationary; resample the next eligible interval after an action completes. Do not
 replay the same optional action consecutively when alternatives exist.
@@ -278,14 +307,14 @@ are seconds; hop probability is per eligible traversal opportunity.
 
 | Default profile | Idle play interval | Hop probability | Jump cooldown |
 |---|---|---|---|
-| Fox / playful | 18-35 | 0.18 | 10 |
-| Cat / reserved | 35-65 | 0.08 | 18 |
-| Red Panda / relaxed | 28-50 | 0.12 | 14 |
-| Ferret / energetic | 12-25 | 0.25 | 8 |
+| Fox / playful | 6-12 | 0.55 | 4 |
+| Cat / reserved | 12-22 | 0.40 | 5 |
+| Red Panda / relaxed | 9-18 | 0.45 | 5 |
+| Ferret / energetic | 4-9 | 0.60 | 3 |
 
 Initial configuration adds [pet] with species, profile, reduced_motion,
 playful_idle, jump_frequency multiplier (0 disables), jump_height,
-jump_speed multiplier, and sleep_after_seconds (default 120). Keep Settings as
+jump_speed multiplier, and sleep_after_seconds (default 45). Keep Settings as
 the existing config-file entry; no new settings panel. Validate finite values,
 nonnegative height/frequency and bounded playback speed; document units and limits
 when implementing. Profiles can be chosen independently of species. Configuration
