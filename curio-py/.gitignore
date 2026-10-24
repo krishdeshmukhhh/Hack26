@@ -1,0 +1,21 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# uv / venv
+.venv/
+.python-version
+
+# Ruff / mypy caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log

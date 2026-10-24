@@ -1,0 +1,48 @@
+# Curio configuration
+# Edit this file to point Curio at your own Cloudflare Worker deployment,
+# or set backend = "local" to run without any API keys.
+
+# "cloud": Claude + AssemblyAI + ElevenLabs through your Cloudflare Worker.
+# "local": your own OpenAI-compatible model server (for example vLLM),
+#          Whisper on this PC, and the built-in Windows voices. See [local].
+backend = "cloud"
+
+# Your deployed Cloudflare Worker URL. Deploy the worker/ folder via
+# `wrangler deploy` and paste the resulting URL here. See README.md.
+worker_url = "https://curio-proxy.your-subdomain.workers.dev"
+
+# Push-to-talk binding. Options: "ctrl+alt" (default), "right_ctrl"
+# (useful for international keyboards where Ctrl+Alt conflicts with AltGr).
+hotkey = "ctrl+alt"
+
+# Default Claude model. Options: "claude-sonnet-4-6" (fast, cheap),
+# "claude-opus-4-6" (slower, smarter). Switchable at runtime via the
+# model picker in the panel.
+default_model = "claude-sonnet-4-6"
+
+# Log verbosity. Options: "DEBUG", "INFO", "WARNING", "ERROR".
+log_level = "INFO"
+
+# Path to knowledge base folder. Each subfolder = one app's KB.
+# Default: %APPDATA%/Curio/knowledge/
+# knowledge_dir = "C:/path/to/knowledge"
+
+# Settings used only when backend = "local". worker_url is ignored then.
+[local]
+# OpenAI-compatible endpoint. With the SSH tunnel from server/README.md
+# running, the cluster's vLLM server appears at localhost:8000.
+llm_base_url = "http://localhost:8000/v1"
+# Must match the model name vLLM is serving.
+llm_model = "Qwen/Qwen3-VL-32B-Instruct"
+# Must match vLLM's --api-key. Set one on a shared cluster.
+llm_api_key = ""
+# Coordinate format the model uses for pointing. "norm1000" for Qwen3-VL,
+# "pixel" for Qwen2.5-VL and most other models.
+point_coords = "norm1000"
+# faster-whisper model: "base.en" (fast), "small.en" (more accurate),
+# "large-v3" (best, wants whisper_device = "cuda").
+whisper_model = "base.en"
+# "cpu" works everywhere. "cuda" needs the CUDA 12 cuBLAS/cuDNN DLLs on PATH.
+whisper_device = "cpu"
+# Part of a Windows voice name, for example "Aria" or "Zira". Empty = default.
+tts_voice = ""

@@ -1,0 +1,38 @@
+[
+  {
+    "type": "Begin",
+    "id": "session_abc123",
+    "expires_at": 1712620800
+  },
+  {
+    "type": "Turn",
+    "turn_order": 0,
+    "turn_is_formatted": false,
+    "end_of_turn": false,
+    "transcript": "hello there how",
+    "words": [
+      {"text": "hello", "start": 120, "end": 360, "confidence": 0.98},
+      {"text": "there", "start": 400, "end": 620, "confidence": 0.97},
+      {"text": "how", "start": 660, "end": 820, "confidence": 0.95}
+    ]
+  },
+  {
+    "type": "Turn",
+    "turn_order": 0,
+    "turn_is_formatted": true,
+    "end_of_turn": true,
+    "transcript": "Hello there, how are you?",
+    "words": [
+      {"text": "Hello", "start": 120, "end": 360, "confidence": 0.98},
+      {"text": "there,", "start": 400, "end": 620, "confidence": 0.97},
+      {"text": "how", "start": 660, "end": 820, "confidence": 0.95},
+      {"text": "are", "start": 860, "end": 980, "confidence": 0.96},
+      {"text": "you?", "start": 1020, "end": 1280, "confidence": 0.97}
+    ]
+  },
+  {
+    "type": "Termination",
+    "audio_duration_seconds": 3.2,
+    "session_duration_seconds": 4.1
+  }
+]
