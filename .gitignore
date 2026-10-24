@@ -6,7 +6,7 @@ build/
 releases/
 .claude/
 coding-plans/
-docs/
 .env
 *.env.*
 *.env
+!server/curio.env.example
