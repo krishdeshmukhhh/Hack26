@@ -1,62 +1,91 @@
-"""Cursor-following companion overlay widget."""
+"""Cursor-following companion overlay, matching macOS Curio's behaviour.
+
+- Idle / responding: a blue triangle beside the cursor, with a soft glow.
+- Listening: five reactive waveform bars replace the triangle.
+- Processing: a small spinner replaces the triangle.
+- Pointing: flies along a bowed arc to the target (turning to face the way
+  it's going and swelling mid-flight), lands beside it, and a pill pops in
+  with "right here!" or similar. After 3 s it fades and flies back; moving
+  the mouse during the return flight snaps it back to the cursor.
+- Walkthrough steps hold at the target until released.
+- Launch: fades in over 2 s, then says "hey! i'm curio".
+- With the cursor toggled off, it appears only for an interaction and fades
+  out a second after it's done.
+"""
 
 from __future__ import annotations
 
 import logging
 import math
+from enum import Enum, auto
 
-from PySide6.QtCore import (
-    Property,
-    QEasingCurve,
-    QPointF,
-    QPropertyAnimation,
-    QRectF,
-    Qt,
-    QTimer,
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, QVariantAnimation
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QGuiApplication,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QRadialGradient,
 )
-from PySide6.QtGui import QColor, QCursor, QPainter, QPolygonF, QRadialGradient
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
-from curio.design_system import DS
 from curio.state import VoiceState
-from curio.ui.companion_position import compute_position, should_update
-from curio.ui.waveform_bars import compute_bar_heights
+from curio.ui.flight import (
+    REST_ROTATION_DEGREES,
+    RETURN_CANCEL_DISTANCE,
+    flight_duration_seconds,
+    flight_frame,
+    follow_center,
+    landing_point,
+)
+from curio.ui.pointer_bubble import (
+    CURSOR_BLUE,
+    ERROR_RED,
+    PointerBubble,
+    friendly_error,
+    random_pointer_phrase,
+)
 from curio.ui.window_effects import make_overlay_window
 
 logger = logging.getLogger(__name__)
 
+WELCOME_TEXT = "hey! i'm curio"
+
+
+def _screen_rect(point: QPointF) -> tuple[int, int, int, int]:
+    """(left, top, width, height) of the screen containing ``point``."""
+    screen = QGuiApplication.screenAt(point.toPoint()) or QGuiApplication.primaryScreen()
+    geo = screen.geometry()
+    return (geo.x(), geo.y(), geo.width(), geo.height())
+
+
+class _Mode(Enum):
+    FOLLOWING = auto()
+    FLYING = auto()      # towards a target
+    POINTING = auto()    # landed, showing the pointer pill
+    RETURNING = auto()   # flying back to the cursor
+
 
 class CompanionWidget(QWidget):
-    """Small cursor-following overlay. Shows a blue triangle when idle."""
+    """The blue buddy that follows the cursor and points at things."""
 
-    # Dimensions -- enough for triangle + future waveform expansion
-    WIDGET_W = 120
-    WIDGET_H = 50
+    CANVAS = 72                # square window; the buddy is drawn at its centre
+    TRIANGLE_SIZE = 18
+    FRAME_MS = 16              # ~60 fps for tracking and flights
+    POINT_HOLD_MS = 3000       # pill stays this long once typed out
+    BUBBLE_FADE_MS = 500
+    ERROR_FLASH_MS = 1000
+    TRANSIENT_HIDE_DELAY_MS = 1000
 
-    # Idle triangle
-    TRIANGLE_SIZE = 21  # px height of equilateral triangle (50% larger than original 14)
-    IDLE_OPACITY = 0.6
-    IDLE_COLOR = QColor("#4a9eff")
-
-    # Cursor tracking
-    TRACK_INTERVAL_MS = 33  # ~30fps
-    OFFSET = 20
-    EDGE_MARGIN = 80
-
-    # Waveform
-    WAVEFORM_BAR_COUNT = 8
-    WAVEFORM_WIDTH = 60       # total width of all bars
-    WAVEFORM_MAX_HEIGHT = 24  # max bar height
-    WAVEFORM_MIN_HEIGHT = 2   # min bar height (silent)
-    WAVEFORM_GAP = 2          # gap between bars
-    WAVEFORM_GAIN = 12.0      # amplify RMS (speech is ~0.01-0.05)
-
-    # Animation durations
-    EXPAND_DURATION_MS = 150
-    CONTRACT_DURATION_MS = 300
-
-    # Active triangle
-    ACTIVE_TRIANGLE_SIZE = 27
+    # Listening waveform (macOS BlueCursorWaveformView).
+    WAVE_PROFILE = (0.4, 0.7, 1.0, 0.7, 0.4)
+    WAVE_BAR_WIDTH = 2.5
+    WAVE_BAR_GAP = 2.0
+    # Our mic level is RMS (speech ~0.01-0.1); the Swift formula expects a
+    # larger power level, so scale it up first.
+    WAVE_LEVEL_GAIN = 3.0
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -69,85 +98,109 @@ class CompanionWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setStyleSheet("background:transparent;")
-        self.setFixedSize(self.WIDGET_W, self.WIDGET_H)
+        self.setFixedSize(self.CANVAS, self.CANVAS)
 
-        self._prev_x = 0
-        self._prev_y = 0
+        self.bubble = PointerBubble()
 
         self._state = VoiceState.IDLE
+        self._mode = _Mode.FOLLOWING
+        self._center = QPointF(QCursor.pos())
+        self._rotation = REST_ROTATION_DEGREES
+        self._flight_scale = 1.0
+        self._opacity = 1.0
         self._audio_level = 0.0
-        self._output_level = 0.0  # system audio output level for responding waveform
-        self._scale = 0.0       # 0.0 = idle, 1.0 = fully expanded (waveform visible)
-        self._opacity = self.IDLE_OPACITY
+        self._spin_degrees = 0.0
+        self._error_flash = False
+        self._hidden_for_capture = False
 
-        self._frozen = False  # freeze cursor tracking during RESPONDING
+        # Pointing
+        self._hold = False
+        self._caption = ""
+        self._return_cancel_origin = QPointF()
 
-        # Animation for waveform expand/contract
-        self._scale_anim = QPropertyAnimation(self, b"anim_scale")
-        self._opacity_anim = QPropertyAnimation(self, b"anim_opacity")
+        # Show/hide toggle (tray "Show Curio")
+        self._cursor_enabled = True
 
-        # Pulse animation for processing/responding states
-        self._pulse_scale = 1.0
-        self._pulse_color: str | None = None
-        self._pulse_anim = QPropertyAnimation(self, b"anim_pulse")
+        self._clock = QElapsedTimer()
+        self._clock.start()
 
-        # Fly-to / return-to-cursor animation (manual lerp — QPropertyAnimation
-        # on pos doesn't interpolate smoothly for top-level windows on Windows)
-        self._fly_target: tuple[int, int] | None = None
-        self._fly_start: tuple[float, float] = (0.0, 0.0)
-        self._fly_end: tuple[float, float] = (0.0, 0.0)
-        self._fly_progress: float = 0.0  # 0.0 → 1.0
-        self._fly_duration_ms: int = 400
-        self._fly_returning: bool = False
-        self._fly_timer = QTimer(self)
-        self._fly_timer.setInterval(self.TRACK_INTERVAL_MS)  # ~30fps
-        self._fly_timer.timeout.connect(self._fly_step)
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setInterval(self.FRAME_MS)
+        self._frame_timer.timeout.connect(self._on_frame)
 
-        # Error flash timer
+        self._flight_start = (0.0, 0.0)
+        self._flight_end = (0.0, 0.0)
+        self._flight_duration_ms = 0.0
+        self._flight_started_ms = 0
+        self._flight_done = None
+
+        self._point_timer = QTimer(self)
+        self._point_timer.setSingleShot(True)
+        self._point_timer.timeout.connect(self._run_point_callback)
+        self._point_callback = None
+
         self._error_timer = QTimer(self)
         self._error_timer.setSingleShot(True)
-        self._error_timer.setInterval(1000)  # 1 second red flash
+        self._error_timer.setInterval(self.ERROR_FLASH_MS)
         self._error_timer.timeout.connect(self._end_error_flash)
-        self._error_flash = False
 
-        self._cursor_timer = QTimer(self)
-        self._cursor_timer.setInterval(self.TRACK_INTERVAL_MS)
-        self._cursor_timer.timeout.connect(self._track_cursor)
+        self._fade_anim = QVariantAnimation(self)
+        self._fade_anim.valueChanged.connect(self._set_opacity)
 
-    # ------------------------------------------------------------------
-    # Qt properties for animation
-    # ------------------------------------------------------------------
-
-    def _get_anim_scale(self) -> float:
-        return self._scale
-
-    def _set_anim_scale(self, val: float) -> None:
-        self._scale = val
-        self.update()  # trigger repaint
-
-    anim_scale = Property(float, _get_anim_scale, _set_anim_scale)
-
-    def _get_anim_opacity(self) -> float:
-        return self._opacity
-
-    def _set_anim_opacity(self, val: float) -> None:
-        self._opacity = val
-        self.update()
-
-    anim_opacity = Property(float, _get_anim_opacity, _set_anim_opacity)
-
-    def _get_anim_pulse(self) -> float:
-        return self._pulse_scale
-
-    def _set_anim_pulse(self, val: float) -> None:
-        self._pulse_scale = val
-        self.update()
-
-    anim_pulse = Property(float, _get_anim_pulse, _set_anim_pulse)
+        self._transient_timer = QTimer(self)
+        self._transient_timer.setInterval(200)
+        self._transient_timer.timeout.connect(self._check_transient_hide)
+        self._transient_idle_since: int | None = None
 
     # ------------------------------------------------------------------
-    # State management
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def show(self) -> None:
+        self._snap_to_cursor()
+        super().show()
+        self._frame_timer.start()
+
+    def start(self) -> None:
+        """First appearance: fade in over 2 s, then greet."""
+        self._set_opacity(0.0)
+        self.show()
+        self._animate_opacity(1.0, 2000)
+        QTimer.singleShot(2000, self._greet)
+
+    def hide(self) -> None:
+        self._frame_timer.stop()
+        self.bubble.hide_now()
+        super().hide()
+
+    def showEvent(self, event) -> None:  # noqa: ARG002
+        make_overlay_window(self)
+
+    def hide_for_capture(self) -> None:
+        self._hidden_for_capture = self.isVisible()
+        if self._hidden_for_capture:
+            self.setVisible(False)
+        self.bubble.hide_for_capture()
+
+    def restore_after_capture(self) -> None:
+        if self._hidden_for_capture:
+            self._hidden_for_capture = False
+            self.setVisible(True)
+        self.bubble.restore_after_capture()
+
+    def set_cursor_enabled(self, enabled: bool) -> None:
+        """Tray toggle. Off: hidden except during an interaction."""
+        self._cursor_enabled = enabled
+        self._transient_timer.stop()
+        if enabled:
+            if not self.isVisible():
+                self.show()
+                self._animate_opacity(1.0, 300)
+        elif self._state == VoiceState.IDLE and self._mode == _Mode.FOLLOWING:
+            self.hide()
+
+    # ------------------------------------------------------------------
+    # Voice state
     # ------------------------------------------------------------------
 
     def set_state(self, state: VoiceState) -> None:
@@ -156,406 +209,304 @@ class CompanionWidget(QWidget):
         self._state = state
 
         if state == VoiceState.LISTENING:
-            # Interrupt: stop any fly animation, clear target, resume tracking
-            self._fly_timer.stop()
-            self._fly_target = None
-            self._fly_returning = False
-            self._frozen = False
-            self._stop_pulse()
-            self._animate_expand()
-        elif state == VoiceState.PROCESSING:
-            self._animate_to_pulse()
-        elif state == VoiceState.RESPONDING:
-            self._frozen = True  # freeze position during TTS
-            self._start_pulse(DS.Colors.companion_responding)
-        elif state == VoiceState.GUIDING:
-            # Stay on the step's target until the user clicks it.
-            self._frozen = True
-            self._start_pulse(DS.Colors.accent_blue)
+            # A new question cancels any pointing and brings the buddy back.
+            self._transient_timer.stop()
+            if not self.isVisible():
+                self._set_opacity(1.0)
+                self.show()
+            self._cancel_pointing()
+            self.bubble.hide_now()
+            self._snap_to_cursor()
         elif state == VoiceState.IDLE:
-            self._stop_pulse()
-            self._animate_contract()
-            if self._fly_target is not None:
-                self.return_to_cursor()
-            else:
-                self._frozen = False
-
+            if self._hold:
+                self.release_hold()
+            if not self._cursor_enabled:
+                self._transient_idle_since = None
+                self._transient_timer.start()
         self.update()
 
     def set_audio_level(self, level: float) -> None:
         self._audio_level = level
-        if self._state == VoiceState.LISTENING:
-            self.update()
-
-    def set_output_level(self, level: float) -> None:
-        self._output_level = level
-        if self._state == VoiceState.RESPONDING:
-            self.update()
-
-    # ------------------------------------------------------------------
-    # Animation helpers
-    # ------------------------------------------------------------------
-
-    def _animate_expand(self) -> None:
-        """Expand waveform: scale 0->1, opacity to full."""
-        self._scale_anim.stop()
-        self._scale_anim.setStartValue(self._scale)
-        self._scale_anim.setEndValue(1.0)
-        self._scale_anim.setDuration(self.EXPAND_DURATION_MS)
-        self._scale_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._scale_anim.start()
-
-        self._opacity_anim.stop()
-        self._opacity_anim.setStartValue(self._opacity)
-        self._opacity_anim.setEndValue(1.0)
-        self._opacity_anim.setDuration(self.EXPAND_DURATION_MS)
-        self._opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._opacity_anim.start()
-
-    def _animate_contract(self) -> None:
-        """Contract waveform: scale 1->0, opacity to idle."""
-        self._scale_anim.stop()
-        self._scale_anim.setStartValue(self._scale)
-        self._scale_anim.setEndValue(0.0)
-        self._scale_anim.setDuration(self.CONTRACT_DURATION_MS)
-        self._scale_anim.setEasingCurve(QEasingCurve.Type.InCubic)
-        self._scale_anim.start()
-
-        self._opacity_anim.stop()
-        self._opacity_anim.setStartValue(self._opacity)
-        self._opacity_anim.setEndValue(self.IDLE_OPACITY)
-        self._opacity_anim.setDuration(self.CONTRACT_DURATION_MS)
-        self._opacity_anim.setEasingCurve(QEasingCurve.Type.InCubic)
-        self._opacity_anim.start()
-
-    # ------------------------------------------------------------------
-    # Error flash
-    # ------------------------------------------------------------------
 
     def flash_error(self, _msg: str = "") -> None:
-        """Brief red flash on error, then return to current state."""
         self._error_flash = True
         self._error_timer.start()
         self.update()
+
+    def show_error(self, message: str) -> None:
+        """Red flash plus a short red pill explaining what to check."""
+        self.flash_error()
+        if self._mode in (_Mode.FLYING, _Mode.POINTING):
+            return  # don't cover a pointer pill mid-point
+        self.bubble.show_text(
+            friendly_error(message), self._bubble_anchor(), color=ERROR_RED, auto_hide_ms=3500
+        )
 
     def _end_error_flash(self) -> None:
         self._error_flash = False
         self.update()
 
     # ------------------------------------------------------------------
-    # Pulse animation helpers
+    # Pointing
     # ------------------------------------------------------------------
 
-    def _animate_to_pulse(self) -> None:
-        """Transition from waveform to pulsing dot (processing)."""
-        # Contract waveform
-        self._scale_anim.stop()
-        self._scale_anim.setStartValue(self._scale)
-        self._scale_anim.setEndValue(0.3)  # small dot, not fully contracted
-        self._scale_anim.setDuration(200)
-        self._scale_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._scale_anim.start()
+    def fly_to(
+        self, x: int, y: int, *, hold: bool = False, step: tuple[int, int] | None = None
+    ) -> None:
+        """Fly to screen point (x, y) and point at it.
 
-        # Keep full opacity
-        self._opacity_anim.stop()
-        self._opacity_anim.setStartValue(self._opacity)
-        self._opacity_anim.setEndValue(1.0)
-        self._opacity_anim.setDuration(200)
-        self._opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._opacity_anim.start()
+        ``hold`` keeps the buddy there (walkthrough step) until
+        ``release_hold``; ``step`` adds "(k/n)" to the pointer phrase.
+        """
+        self._point_timer.stop()
+        self.bubble.hide_now()
+        self._hold = hold
+        phrase = random_pointer_phrase()
+        self._caption = f"{phrase} ({step[0]}/{step[1]})" if step else phrase
 
-        self._start_pulse(DS.Colors.companion_processing)
+        dest = landing_point((x, y), _screen_rect(QPointF(x, y)))
+        self._mode = _Mode.FLYING
+        self._start_flight(dest, self._arrive_at_target)
+        logger.info("fly_to: (%d, %d)%s", x, y, " [hold]" if hold else "")
 
-    def _start_pulse(self, color_hex: str) -> None:
-        """Start looping pulse animation."""
-        self._pulse_color = color_hex
-        self._pulse_anim.stop()
-        self._pulse_anim.setStartValue(0.8)
-        self._pulse_anim.setEndValue(1.2)
-        self._pulse_anim.setDuration(600)
-        self._pulse_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._pulse_anim.setLoopCount(-1)  # infinite loop
-        self._pulse_anim.start()
-
-    def _stop_pulse(self) -> None:
-        """Stop pulse animation."""
-        self._pulse_anim.stop()
-        self._pulse_scale = 1.0
-        self._pulse_color = None
-
-    # ------------------------------------------------------------------
-    # Visibility
-    # ------------------------------------------------------------------
-
-    def showEvent(self, event) -> None:  # noqa: ARG002
-        """Reapply DWM transparency on every show — Windows resets it."""
-        make_overlay_window(self)
-
-    def show(self) -> None:
-        super().show()
-        # Initialize position immediately
-        self._track_cursor(force=True)
-        self._cursor_timer.start()
-
-    def hide(self) -> None:
-        self._cursor_timer.stop()
-        super().hide()
-
-    def hide_for_capture(self) -> None:
-        """Temporarily hide during screen capture."""
-        self.setVisible(False)
-
-    def restore_after_capture(self) -> None:
-        """Restore after screen capture."""
-        self.setVisible(True)
-
-    def fly_to(self, x: int, y: int) -> None:
-        """Smoothly animate companion to target screen coordinates."""
-        self._fly_target = (x, y)
-        self._fly_returning = False
-        # Offset so triangle tip points near the target
-        target_x = x - int(self.WIDGET_W * 0.15)
-        target_y = y - int(self.WIDGET_H * 0.15)
-
-        pos = self.pos()
-        self._fly_start = (float(pos.x()), float(pos.y()))
-        self._fly_end = (float(target_x), float(target_y))
-        self._fly_progress = 0.0
-        self._fly_duration_ms = 400
-        self._fly_timer.start()
-        logger.info("fly_to: (%d, %d)", x, y)
+    def release_hold(self) -> None:
+        """End a walkthrough hold: fade the pill and fly back."""
+        self._hold = False
+        if self._mode == _Mode.POINTING:
+            self._fade_bubble_then_return()
 
     def return_to_cursor(self) -> None:
-        """Smoothly animate back to cursor position, then resume tracking."""
-        if self._fly_target is None:
+        if self._mode in (_Mode.FLYING, _Mode.POINTING):
+            self._hold = False
+            self._fade_bubble_then_return()
+
+    def _arrive_at_target(self) -> None:
+        self._mode = _Mode.POINTING
+        self._rotation = REST_ROTATION_DEGREES
+        self.bubble.show_text(self._caption, self._bubble_anchor(), on_typed=self._pointer_typed)
+
+    def _pointer_typed(self) -> None:
+        if self._mode != _Mode.POINTING or self._hold:
             return
-        self._fly_target = None
-        self._fly_returning = True
+        self._restart_point_timer(self.POINT_HOLD_MS, self._fade_bubble_then_return)
 
-        cursor_pos = QCursor.pos()
-        screen = QApplication.screenAt(cursor_pos)
-        if screen is None:
-            self._frozen = False
+    def _fade_bubble_then_return(self) -> None:
+        if self._mode != _Mode.POINTING:
+            if self._mode == _Mode.FLYING:
+                self._fly_back()
             return
-        geo = screen.geometry()
-        screen_rect = (geo.x(), geo.y(), geo.width(), geo.height())
-        placement = compute_position(
-            cursor_pos.x(), cursor_pos.y(), screen_rect,
-            companion_size=(self.WIDGET_W, self.WIDGET_H),
-            offset=self.OFFSET, edge_margin=self.EDGE_MARGIN,
-        )
+        self.bubble.fade_out(self.BUBBLE_FADE_MS)
+        self._restart_point_timer(self.BUBBLE_FADE_MS, self._fly_back)
 
-        pos = self.pos()
-        self._fly_start = (float(pos.x()), float(pos.y()))
-        self._fly_end = (float(placement.x), float(placement.y))
-        self._fly_progress = 0.0
-        self._fly_duration_ms = 300
-        self._fly_timer.start()
+    def _fly_back(self) -> None:
+        if self._mode not in (_Mode.POINTING, _Mode.FLYING):
+            return
+        cursor = QPointF(QCursor.pos())
+        self._return_cancel_origin = cursor
+        self._mode = _Mode.RETURNING
+        self._start_flight(self._follow_point(cursor), self._finish_return)
 
-    def _fly_step(self) -> None:
-        """Advance one frame of fly animation (called by _fly_timer)."""
-        step = self.TRACK_INTERVAL_MS / self._fly_duration_ms
-        self._fly_progress = min(1.0, self._fly_progress + step)
+    def _finish_return(self) -> None:
+        self._mode = _Mode.FOLLOWING
+        self._rotation = REST_ROTATION_DEGREES
+        self._flight_scale = 1.0
 
-        # OutCubic easing: 1 - (1 - t)^3
-        t = self._fly_progress
-        eased = 1.0 - (1.0 - t) ** 3
+    def _cancel_pointing(self) -> None:
+        self._point_timer.stop()
+        self._flight_done = None
+        self._hold = False
+        self._mode = _Mode.FOLLOWING
+        self._rotation = REST_ROTATION_DEGREES
+        self._flight_scale = 1.0
 
-        sx, sy = self._fly_start
-        ex, ey = self._fly_end
-        cur_x = sx + (ex - sx) * eased
-        cur_y = sy + (ey - sy) * eased
-        self.move(int(cur_x), int(cur_y))
+    def _restart_point_timer(self, ms: int, callback) -> None:
+        self._point_callback = callback
+        self._point_timer.start(ms)
 
-        if self._fly_progress >= 1.0:
-            self._fly_timer.stop()
-            if self._fly_returning:
-                self._fly_returning = False
-                self._frozen = False
-                self._prev_x = 0
-                self._prev_y = 0
-                self._track_cursor(force=True)
+    def _run_point_callback(self) -> None:
+        callback, self._point_callback = self._point_callback, None
+        if callback is not None:
+            callback()
 
     # ------------------------------------------------------------------
-    # Cursor tracking
+    # Flight + tracking (one frame timer drives both)
     # ------------------------------------------------------------------
 
-    def _track_cursor(self, force: bool = False) -> None:
-        pos = QCursor.pos()  # Global screen coordinates
-        if self._frozen:
-            return
-        cx, cy = pos.x(), pos.y()
+    def _start_flight(self, dest: tuple[float, float], on_done) -> None:
+        start = (self._center.x(), self._center.y())
+        self._flight_start = start
+        self._flight_end = dest
+        self._flight_duration_ms = flight_duration_seconds(start, dest) * 1000
+        self._flight_started_ms = self._clock.elapsed()
+        self._flight_done = on_done
 
-        if not force and not should_update(self._prev_x, self._prev_y, cx, cy):
-            return
+    def _on_frame(self) -> None:
+        if self._mode in (_Mode.FLYING, _Mode.RETURNING) and self._flight_done is not None:
+            if self._mode == _Mode.RETURNING:
+                moved = QPointF(QCursor.pos()) - self._return_cancel_origin
+                if math.hypot(moved.x(), moved.y()) > RETURN_CANCEL_DISTANCE:
+                    self._cancel_pointing()
+                    self._snap_to_cursor()
+                    return
+            elapsed = self._clock.elapsed() - self._flight_started_ms
+            progress = min(1.0, elapsed / max(1.0, self._flight_duration_ms))
+            (x, y), rotation, scale = flight_frame(self._flight_start, self._flight_end, progress)
+            self._center = QPointF(x, y)
+            self._rotation = rotation
+            self._flight_scale = scale
+            self._place()
+            if progress >= 1.0:
+                done, self._flight_done = self._flight_done, None
+                self._flight_scale = 1.0
+                done()
+        elif self._mode == _Mode.FOLLOWING:
+            self._snap_to_cursor()
 
-        screen = QApplication.screenAt(pos)
-        if screen is None:
-            return
+        if self._state == VoiceState.PROCESSING:
+            self._spin_degrees = (self._spin_degrees + 360 * self.FRAME_MS / 800) % 360
+        if self.bubble.active and self._mode != _Mode.RETURNING:
+            self.bubble.move_to(self._bubble_anchor())
+        self.update()
 
-        geo = screen.geometry()
-        screen_rect = (geo.x(), geo.y(), geo.width(), geo.height())
+    def _follow_point(self, cursor: QPointF) -> tuple[float, float]:
+        return follow_center((cursor.x(), cursor.y()), _screen_rect(cursor))
 
-        placement = compute_position(
-            cx,
-            cy,
-            screen_rect,
-            companion_size=(self.WIDGET_W, self.WIDGET_H),
-            offset=self.OFFSET,
-            edge_margin=self.EDGE_MARGIN,
+    def _snap_to_cursor(self) -> None:
+        x, y = self._follow_point(QPointF(QCursor.pos()))
+        self._center = QPointF(x, y)
+        self._place()
+
+    def _place(self) -> None:
+        half = self.CANVAS / 2
+        pos = (int(self._center.x() - half), int(self._center.y() - half))
+        if pos != (self.x(), self.y()):
+            self.move(*pos)
+
+    def _bubble_anchor(self) -> QPointF:
+        # macOS: pill's left edge 10 px right of the buddy, centred 18 px below.
+        return QPointF(self._center.x() + 10, self._center.y() + 18)
+
+    # ------------------------------------------------------------------
+    # Greeting, fading, transient visibility
+    # ------------------------------------------------------------------
+
+    def _greet(self) -> None:
+        if self._state == VoiceState.IDLE and self._mode == _Mode.FOLLOWING:
+            self.bubble.show_text(WELCOME_TEXT, self._bubble_anchor(), auto_hide_ms=2000)
+
+    def _animate_opacity(self, end: float, ms: int) -> None:
+        self._fade_anim.stop()
+        self._fade_anim.setDuration(ms)
+        self._fade_anim.setStartValue(self._opacity)
+        self._fade_anim.setEndValue(end)
+        self._fade_anim.start()
+
+    def _set_opacity(self, value: float) -> None:
+        self._opacity = float(value)
+        self.update()
+
+    def _check_transient_hide(self) -> None:
+        """Cursor toggled off: hide 1 s after speech and pointing are done."""
+        busy = (
+            self._state != VoiceState.IDLE
+            or self._mode != _Mode.FOLLOWING
+            or self.bubble.active
         )
-
-        self.move(placement.x, placement.y)
-        self._prev_x = cx
-        self._prev_y = cy
+        if busy:
+            self._transient_idle_since = None
+            return
+        now = self._clock.elapsed()
+        if self._transient_idle_since is None:
+            self._transient_idle_since = now
+        elif now - self._transient_idle_since >= self.TRANSIENT_HIDE_DELAY_MS:
+            self._transient_timer.stop()
+            self.hide()
 
     # ------------------------------------------------------------------
     # Painting
     # ------------------------------------------------------------------
 
-    # Aura: tight subtle glow just outside the triangle
-    AURA_RADIUS_FACTOR = 1.3
-    AURA_OPACITY = 0.15
-
     def paintEvent(self, event) -> None:  # noqa: ARG002
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setOpacity(self._opacity)
+        c = QPointF(self.CANVAS / 2, self.CANVAS / 2)
+        color = QColor(ERROR_RED if self._error_flash else CURSOR_BLUE)
 
-        # Determine color
-        if self._error_flash:
-            base_color = DS.Colors.companion_error
-        elif self._pulse_color:
-            base_color = self._pulse_color
-        elif self._state == VoiceState.LISTENING:
-            base_color = DS.Colors.companion_listening
+        flying = self._mode in (_Mode.FLYING, _Mode.RETURNING, _Mode.POINTING)
+        if self._state == VoiceState.LISTENING and not flying:
+            self._paint_glow(painter, c, color, 12, 0.35)
+            self._paint_waveform(painter, c, color)
+        elif self._state == VoiceState.PROCESSING and not flying:
+            self._paint_glow(painter, c, color, 12, 0.35)
+            self._paint_spinner(painter, c, color)
         else:
-            base_color = DS.Colors.companion_idle
-
-        painter.setPen(Qt.PenStyle.NoPen)
-
-        # Triangle sizing
-        if self._state in (VoiceState.PROCESSING, VoiceState.RESPONDING, VoiceState.GUIDING):
-            tri_size = self.ACTIVE_TRIANGLE_SIZE
-        else:
-            size_delta = self.ACTIVE_TRIANGLE_SIZE - self.TRIANGLE_SIZE
-            tri_size = self.TRIANGLE_SIZE + size_delta * self._scale
-
-        # Triangle points at cursor (upper-left) at 45° angle.
-        # Tip is at upper-left corner of widget, base fans out toward lower-right.
-        h = tri_size
-        w = h * 0.866
-        # Triangle center for aura positioning
-        tri_cx = w * 0.4
-        tri_cy = h * 0.4
-
-        # Draw aura (subtle radial glow behind triangle)
-        aura_r = tri_size * self.AURA_RADIUS_FACTOR
-        aura_color = QColor(base_color)
-        aura_color.setAlphaF(self.AURA_OPACITY * self._opacity)
-        gradient = QRadialGradient(QPointF(tri_cx, tri_cy), aura_r)
-        gradient.setColorAt(0.0, aura_color)
-        transparent = QColor(base_color)
-        transparent.setAlphaF(0.0)
-        gradient.setColorAt(1.0, transparent)
-        painter.setBrush(gradient)
-        painter.drawEllipse(QPointF(tri_cx, tri_cy), aura_r, aura_r)
-
-        # Draw 45°-rotated triangle pointing toward cursor (upper-left)
-        # Tip at top-left, two base vertices fan out
-        color = QColor(base_color)
-        color.setAlphaF(self._opacity)
-        painter.setBrush(color)
-
-        angle = math.radians(225)  # point upper-left (toward cursor)
-        tip_x = tri_cx + w * 0.5 * math.cos(angle)
-        tip_y = tri_cy + w * 0.5 * math.sin(angle)
-        base_angle_1 = angle + math.radians(140)
-        base_angle_2 = angle - math.radians(140)
-        base1_x = tri_cx + h * 0.4 * math.cos(base_angle_1)
-        base1_y = tri_cy + h * 0.4 * math.sin(base_angle_1)
-        base2_x = tri_cx + h * 0.4 * math.cos(base_angle_2)
-        base2_y = tri_cy + h * 0.4 * math.sin(base_angle_2)
-
-        triangle = QPolygonF(
-            [
-                QPointF(tip_x, tip_y),
-                QPointF(base1_x, base1_y),
-                QPointF(base2_x, base2_y),
-            ]
-        )
-        painter.drawPolygon(triangle)
-
-        # Waveform bars (offset from triangle center, extending right)
-        waveform_x = tri_cx + w * 0.6
-        waveform_cy = tri_cy + h * 0.3
-
-        if self._state == VoiceState.PROCESSING and not self._error_flash:
-            # Pulsing dot
-            radius = 6 * self._pulse_scale
-            dot_color = QColor(base_color)
-            dot_color.setAlphaF(self._opacity)
-            painter.setBrush(dot_color)
-            painter.drawEllipse(QPointF(waveform_x + 8, waveform_cy), radius, radius)
-        elif self._state == VoiceState.RESPONDING and not self._error_flash:
-            self._paint_breathing_waveform(
-                painter, tri_offset=waveform_x, cy=waveform_cy
-            )
-        elif self._scale > 0.01 and self._state == VoiceState.LISTENING:
-            self._paint_waveform(painter, tri_offset=waveform_x, cy=waveform_cy)
-
+            glow = 8 + (self._flight_scale - 1.0) * 20
+            self._paint_glow(painter, c, color, glow * 1.6, 0.45)
+            self._paint_triangle(painter, c, color)
         painter.end()
 
-    def _paint_waveform(self, painter: QPainter, tri_offset: float, cy: float) -> None:
-        """Paint 8-bar diamond waveform to the right of the triangle."""
-        boosted = min(1.0, self._audio_level * self.WAVEFORM_GAIN)
-        bar_heights = compute_bar_heights(
-            boosted, self.WAVEFORM_MAX_HEIGHT, self.WAVEFORM_MIN_HEIGHT
-        )
+    def _paint_glow(
+        self, painter: QPainter, c: QPointF, color: QColor, radius: float, alpha: float
+    ) -> None:
+        gradient = QRadialGradient(c, radius)
+        inner = QColor(color)
+        inner.setAlphaF(alpha)
+        outer = QColor(color)
+        outer.setAlphaF(0.0)
+        gradient.setColorAt(0.0, inner)
+        gradient.setColorAt(1.0, outer)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(gradient)
+        painter.drawEllipse(c, radius, radius)
 
-        total_bar_width = self.WAVEFORM_WIDTH - (self.WAVEFORM_GAP * (self.WAVEFORM_BAR_COUNT - 1))
-        bar_w = total_bar_width / self.WAVEFORM_BAR_COUNT
-
-        color = QColor(DS.Colors.companion_listening)
-        color.setAlphaF(self._opacity * self._scale)  # fade with scale
+    def _paint_triangle(self, painter: QPainter, c: QPointF, color: QColor) -> None:
+        # Equilateral, centred on its centroid (the Swift Triangle shape).
+        size = self.TRIANGLE_SIZE * self._flight_scale
+        height = size * math.sqrt(3) / 2
+        painter.save()
+        painter.translate(c)
+        painter.rotate(self._rotation)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(color)
+        painter.drawPolygon(QPolygonF([
+            QPointF(0, -height / 1.5),
+            QPointF(-size / 2, height / 3),
+            QPointF(size / 2, height / 3),
+        ]))
+        painter.restore()
 
-        x = tri_offset
-        for bar_h in bar_heights:
-            h = bar_h * self._scale  # scale height with animation
-            if h < self.WAVEFORM_MIN_HEIGHT:
-                h = self.WAVEFORM_MIN_HEIGHT * self._scale
-            y = cy - h / 2
-            painter.drawRoundedRect(
-                QRectF(x, y, bar_w, h), 2, 2
-            )
-            x += bar_w + self.WAVEFORM_GAP
-
-    def _paint_breathing_waveform(self, painter: QPainter, tri_offset: float, cy: float) -> None:
-        """Paint diamond waveform for RESPONDING state driven by system audio output."""
-        # Use real output level if available, fall back to pulse breathing
-        # Output level is already 0.0–1.0 peak from Windows audio meter (no gain needed)
-        if self._output_level > 0.005:
-            level = min(1.0, self._output_level)
-        else:
-            # Fallback: gentle breathing from pulse animation
-            synthetic = (self._pulse_scale - 0.8) / 0.4
-            level = max(0.3, min(1.0, synthetic))
-
-        bar_heights = compute_bar_heights(
-            level, self.WAVEFORM_MAX_HEIGHT, self.WAVEFORM_MIN_HEIGHT
-        )
-
-        total_bar_width = self.WAVEFORM_WIDTH - (self.WAVEFORM_GAP * (self.WAVEFORM_BAR_COUNT - 1))
-        bar_w = total_bar_width / self.WAVEFORM_BAR_COUNT
-
-        color = QColor(DS.Colors.companion_responding)
-        color.setAlphaF(self._opacity)
+    def _paint_waveform(self, painter: QPainter, c: QPointF, color: QColor) -> None:
+        seconds = self._clock.elapsed() / 1000.0
+        level = max(self._audio_level * self.WAVE_LEVEL_GAIN - 0.008, 0.0)
+        eased = min(level * 2.85, 1.0) ** 0.76
+        count = len(self.WAVE_PROFILE)
+        total = count * self.WAVE_BAR_WIDTH + (count - 1) * self.WAVE_BAR_GAP
+        x = c.x() - total / 2
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(color)
-
-        x = tri_offset
-        for bar_h in bar_heights:
-            y = cy - bar_h / 2
+        for i, weight in enumerate(self.WAVE_PROFILE):
+            phase = seconds * 3.6 + i * 0.35
+            height = (3 + eased * 10 * weight + (math.sin(phase) + 1) / 2 * 1.5) * 1.3
             painter.drawRoundedRect(
-                QRectF(x, y, bar_w, bar_h), 2, 2
+                QRectF(x, c.y() - height / 2, self.WAVE_BAR_WIDTH, height), 1.5, 1.5
             )
-            x += bar_w + self.WAVEFORM_GAP
+            x += self.WAVE_BAR_WIDTH + self.WAVE_BAR_GAP
+
+    def _paint_spinner(self, painter: QPainter, c: QPointF, color: QColor) -> None:
+        """A 70% arc (Swift: trim 0.15-0.85) fading from tail to head, one turn per 0.8 s."""
+        radius = 7.5
+        rect = QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius)
+        sweep = 252.0
+        segments = 14
+        head = -self._spin_degrees  # Qt angles: counter-clockwise from 3 o'clock
+        for i in range(segments):
+            fraction = (i + 1) / segments  # 0 at the tail, 1 at the head
+            seg_color = QColor(color)
+            seg_color.setAlphaF(fraction)
+            pen = QPen(seg_color, 2.5)
+            last = i == segments - 1
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap if last else Qt.PenCapStyle.FlatCap)
+            painter.setPen(pen)
+            seg_start = head + sweep * (1 - fraction)
+            painter.drawArc(rect, int(seg_start * 16), int(-sweep / segments * 16 - 8))

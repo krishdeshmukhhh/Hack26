@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-MAX_TURNS = 20
+# The macOS app keeps the last 10 exchanges.
+MAX_TURNS = 10
 
 
 class ConversationHistory:

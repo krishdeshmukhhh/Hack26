@@ -70,13 +70,13 @@ class FakeTTS(QObject):
 
 class FakeOverlays:
     def __init__(self) -> None:
-        self.flights: list[tuple[int, int]] = []
+        self.flights: list[tuple[int, int, bool, tuple[int, int] | None]] = []
 
     def hide_for_capture(self) -> None: ...
     def restore_after_capture(self) -> None: ...
 
-    def fly_to(self, x: int, y: int) -> None:
-        self.flights.append((x, y))
+    def fly_to(self, x: int, y: int, *, hold: bool = False, step=None) -> None:
+        self.flights.append((x, y, hold, step))
 
 
 class FakeClickWatcher(QObject):
@@ -168,7 +168,9 @@ def test_two_step_walkthrough(qt_app, monkeypatch) -> None:
     asyncio.run(run())
     assert parts["annotations"][-1] == ("folder", 2, 2)
     assert parts["tts"].spoken[-1] == "now pick folder."
-    assert len(parts["overlays"].flights) == 2
+    # Step 1 holds at its target until the click; the final step doesn't.
+    flights = parts["overlays"].flights
+    assert [(hold, step) for _, _, hold, step in flights] == [(True, (1, 2)), (False, (2, 2))]
     # Final step: no more waiting.
     assert manager._state == VoiceState.IDLE
     assert not parts["clicks"].active
@@ -223,3 +225,16 @@ def test_clicks_ignored_outside_walkthrough(qt_app, monkeypatch) -> None:
     assert not parts["clicks"].active
     assert parts["annotations"] == [("", 0, 0)]
     assert len(parts["llm"].requests) == 1
+
+
+def test_history_stores_answers_without_tags(qt_app, monkeypatch) -> None:
+    manager, parts = _manager(["the save button is up top. [POINT:500,40:save]"], monkeypatch)
+
+    async def run() -> None:
+        _ask(manager, "where is save")
+        await _settle(manager)
+
+    asyncio.run(run())
+    assert manager._history._turns[-1] == ("where is save", "the save button is up top.")
+    # Spinner (PROCESSING) until there's an answer, then RESPONDING, then IDLE.
+    assert parts["states"][-3:] == [VoiceState.PROCESSING, VoiceState.RESPONDING, VoiceState.IDLE]

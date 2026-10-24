@@ -60,8 +60,14 @@ class CaptureVisibilityController(Protocol):
         """Restore after screen capture."""
         ...
 
-    def fly_to(self, x: int, y: int) -> None:
-        """Animate companion to target screen position."""
+    def fly_to(
+        self, x: int, y: int, *, hold: bool = False, step: tuple[int, int] | None = None
+    ) -> None:
+        """Fly the companion to a screen point and point at it.
+
+        ``hold`` keeps it there (walkthrough step waiting for a click);
+        ``step`` is (index, total) for the pointer pill.
+        """
         ...
 
 
@@ -458,10 +464,8 @@ class CompanionManager(QObject):
                 kb_content, app_name, point_coords=self._config.point_coords
             )
 
-            # Transition to RESPONDING.
-            self._set_state(VoiceState.RESPONDING)
-
-            # Send to LLM.
+            # Stay in PROCESSING (spinner) while the model answers, as the
+            # macOS app does; RESPONDING starts when there's something to say.
             full_text = await self._llm.send(
                 messages,
                 system=system_prompt,
@@ -470,7 +474,6 @@ class CompanionManager(QObject):
 
             # Only commit to history and emit completion if not cancelled.
             if not self._cancel_flag:
-                self._history.append(text, full_text)
                 self.response_complete.emit(full_text)
                 self.success_turn_completed.emit()
 
@@ -478,6 +481,10 @@ class CompanionManager(QObject):
                 # companion to the target, and track walkthrough progress.
                 without_step, step = parse_step_tag(full_text)
                 spoken_text, point_tag = parse_point_tag(without_step)
+                # Store the answer without tags, like the macOS app, so old
+                # coordinates don't confuse later turns.
+                self._history.append(text, spoken_text)
+                self._set_state(VoiceState.RESPONDING)
                 self.response_annotated.emit(
                     point_tag.label if point_tag is not None else "",
                     step.index if step is not None else 0,
@@ -489,7 +496,12 @@ class CompanionManager(QObject):
                         point_tag, self._current_screenshots, self._config.point_coords
                     )
                     if coords is not None:
-                        self._panel_visibility_controller.fly_to(coords[0], coords[1])
+                        self._panel_visibility_controller.fly_to(
+                            coords[0],
+                            coords[1],
+                            hold=step is not None and step.has_more,
+                            step=(step.index, step.total) if step is not None else None,
+                        )
                         logger.info(
                             "POINT: (%d, %d) label=%s",
                             coords[0], coords[1], point_tag.label,
