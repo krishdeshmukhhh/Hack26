@@ -12,3 +12,5 @@ coding-plans/
 !server/curio.env.example
 
 .venv/
+
+.worktrees/

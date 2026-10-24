@@ -20,6 +20,25 @@ This document describes **target functionality**, not a claim that every feature
 
 ## 2. Release scope and priorities
 
+### Integrated coaching slices
+
+- Tutorial URL coach: public HTML extraction, attributed editable preview,
+  navigation, questions, explanation, recovery and explicit screen sharing.
+  Videos require an actual supplied transcript; no title-based inference.
+- Local tutorial uploads: TXT, Markdown, HTML and text-based PDFs use the same
+  preview/coaching flow, with line/page references. Scanned PDFs and Word/image/
+  video files are unsupported; document text is shared with the configured AI.
+- Live integral tutor: polynomial problems/steps, exact checking, graduated hints,
+  equation recognition with explicit confirmation, and unassisted related practice.
+  Trig/log/radical/definite integrals and variable denominators are unsupported.
+- Explicit mode selection and one voice dispatcher. Stop/Escape/close return to
+  ordinary assistance; its memory, streaming and POINT behavior remain separate.
+- Coaching content is transient. Model assertions/clicks do not establish
+  independent verification. Physical UI/audio, live-provider quality and packaging
+  remain unchecked; tests do not establish educational outcomes.
+
+See PROGRESS.md for actual verification and coaching-integration.md for review.
+
 | Phase | Scope | Completion gate |
 | --- | --- | --- |
 | P0 — Animated pet MVP | Four pets, sprite playback, cursor following, voice-state reactions, POINT behavior, pet selection | Real Windows UI smoke test and automated tests pass |
