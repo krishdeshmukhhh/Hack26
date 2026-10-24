@@ -136,3 +136,54 @@ Implemented on `codex/animated-pet-design` after design/mapping approval.
   and frozen executable startup. No live model-server check was performed.
 - Cat speaking is a grooming fallback; sleep is a resting pose. Jump height is
   reserved for future external-arc clips and does not affect these four sheets.
+
+## Whimsical pursuit refinement - 2026-10-24
+
+Work was split in parallel into pursuit motion, behavior/profile tuning, and
+widget/config integration tests. All work remains on codex/animated-pet-design.
+
+- Replaced cursor-attached exponential convergence with PursuitMotion: a finite
+  0.25-0.65 second hesitation, then walking at profile-specific speed, eased
+  arrival and a resting radius. The latest destination updates during hesitation
+  and hops without restarting the delay or queuing paths.
+- Walking frames begin only when the pet actually travels. Idle play and hopping
+  are more noticeable, with profile-specific intervals/cooldowns. POINT bypasses
+  hesitation; reduced motion and important AI reactions retain their behavior.
+- New configs default to sleep after 45 seconds. Existing explicit sleep settings
+  remain unchanged. Verified settle, sleep and wake transitions.
+- **156 tests pass with Python 3.12.15**, including new deterministic pursuit,
+  shared jump/walk trajectory and actual widget timer tests. Scoped Ruff passes.
+- Rendered and inspected delayed-pursuit-preview.png using actual Qt sprite
+  painting. Its sleep threshold is shortened to 10 seconds for the preview only.
+  Physical desktop animation feel and multi-monitor behavior remain manual checks.
+
+## Accelerated catch-up and moving fox jumps - 2026-10-24
+
+- Distant pursuit now accelerates smoothly up to 5x profile walking speed,
+  slowing at arrival without overshoot. The existing reaction pause is retained.
+- Removed the 600-pixel jump exclusion. Failed hop rolls retry after actual travel
+  rather than suppressing jumps for an entire long chase. The playful profile
+  uses 55% per eligible opportunity and a 4-second cooldown.
+- Uses the fox's existing R4 C1-11 jump sequence, with no doubled vertical arc.
+  Jump movement follows the same accelerating trajectory as walking; active AI,
+  POINT and reduced-motion exclusions are preserved.
+- Added regressions for acceleration, long-distance fox clip selection, returning
+  cursor/no overshoot, repeated hop opportunities and cooldowns. Verification:
+  160 tests pass on Python 3.12.15; scoped Ruff passes. Actual desktop speed/feel
+  remains a manual check after restarting the app.
+
+## Five-second catch-up and all-pet arrival hops - 2026-10-24
+
+- Stronger acceleration and a five-second pursuit budget (including hesitation)
+  replace the former fixed 5x catch-up limit. Progress uses remaining distance
+  and time, keeps the latest target and clamps arrival without overshoot.
+- Increased traversal-hop probabilities for reserved, relaxed and energetic
+  profiles, so cat/red panda/ferret jumps are easier to see. All species use
+  their own approved sprite clips, not a shared fox animation.
+- Added one-shot cursor-arrival hops with a separate cooldown. No extra hop is
+  queued behind an existing animation. AI, POINT, reduced-motion, missing-clip
+  and jump-disabled exclusions remain in effect.
+- Verified deadline behavior across four base speeds and 500-20,000 pixel
+  distances, all four pets' traversal/arrival mappings, one-shot completion and
+  interaction exclusions. Full suite: 188 tests pass on Python 3.12.15; scoped
+  Ruff passes. Physical desktop animation feel still needs manual review.

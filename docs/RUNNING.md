@@ -156,8 +156,23 @@ playful_idle = true
 jump_frequency = 1.0            # 0 disables; valid 0..5
 jump_height = 0.0               # reserved 0..64 pixels; no effect on supplied sheets
 jump_speed = 1.0                # multiplier, valid 0.25..4
-sleep_after_seconds = 120.0     # valid 10..3600
+sleep_after_seconds = 45.0     # valid 10..3600
 ```
+
+The pet pauses briefly (0.25-0.65 seconds depending on profile), then walks toward
+the latest cursor position. Far-away catch-up now accelerates more aggressively
+and finishes within a five-second pursuit budget, including hesitation, for a
+stationary cursor destination. Long chases can include occasional hops,
+with cooldowns preventing continuous jumping. All four pets use their own jump
+clips during pursuit and can play a single cute hop after arriving near the
+cursor. Arrival hops never interrupt active AI interactions. Small cursor movements near an
+arrived pet leave it resting. It may hop during pursuit or play while idle,
+then settles into sleep after 45 seconds by default. Move the cursor or use
+push-to-talk to wake it. POINT movement starts immediately.
+
+If your existing config contains `sleep_after_seconds = 120`, it remains 120;
+change it to 45 and restart to use the shorter sleep delay. Quit from the tray
+and run `uv run python -m curio` again to load behavior updates.
 
 Profiles work with any species; auto selects the species default. Reduced motion
 uses static state frames and direct movement, disabling autonomous jumps and idle
@@ -175,8 +190,9 @@ mixed DPI, monitor unplug/reconnect and return from pointing. Confirm speaking
 begins with audible playback rather than synthesis. Frozen executable startup
 still needs manual verification; curio.spec includes the four sheets and metadata.
 
-The agent verified 138 tests with Python 3.13.5/PySide6 6.8.3 because Python 3.12
-was unavailable on this host. Continue using the documented Python 3.12 setup.
+The initial implementation passed 138 tests with Python 3.13.5/PySide6 6.8.3.
+The delayed-pursuit refinement now passes 156 tests on Python 3.12.15 using the
+project environment. Continue using the documented Python 3.12 setup.
 This host's newest Qt wheel failed with a DLL/procedure error; verification used
 6.8.3. If Qt fails to import, rebuild the environment and check conflicting Qt
 DLLs on PATH. No project interpreter requirement was changed.

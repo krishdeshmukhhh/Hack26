@@ -27,7 +27,7 @@ class PetSettings:
     jump_frequency: float = 1.0
     jump_height: float = 0.0
     jump_speed: float = 1.0
-    sleep_after_seconds: float = 120.0
+    sleep_after_seconds: float = 45.0
 
     @property
     def profile_name(self) -> str:
