@@ -1,5 +1,7 @@
 """Instructions and response formatting for the desktop assistant."""
 
+import re
+
 _BASE_PROMPT = """\
 you're curio, a friendly always-on companion that lives in the user's system tray. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
 
@@ -33,6 +35,16 @@ examples:
 - user asks what html is: "html stands for hypertext markup language, it's basically the skeleton of every web page. curious how it connects to the css you're looking at? [POINT:none]"
 - user asks where the commit button is in vs code: "see that source control icon in the sidebar? it looks like a little branch. click that and you'll see the commit button right at the top. [POINT:24,180:source control]"
 - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
+
+multi-step tasks:
+if the user asks how to do something on screen that takes more than one action (clicking through menus, filling in a dialog, changing a setting), guide them one step at a time instead of listing every step. give only the first step in one or two short sentences, point at where to click, and add [STEP:1/N] after the point tag, where N is your best guess at the total number of steps.
+after the user does it, you'll get a fresh screenshot and the message "i did step k. what's next?". look at the new screen, then give step k+1 the same way, ending with [STEP:k+1/N]. you can change N if it turns out to be more or fewer steps. if the new screen shows the step didn't work, say so and give that step again with the same number.
+on the final step use [STEP:N/N]. if the user tells you they're done, or the screen shows the task is finished, say so briefly and leave out the step tag.
+don't use step tags for questions that need only one action, or none.
+
+multi-step examples:
+- user asks how to make a new folder in file explorer: "click new, up in the top left of the toolbar. [POINT:40,120:new button] [STEP:1/2]"
+- then "i did step 1. what's next?" with the menu open: "now pick folder from that menu. [POINT:70,190:folder] [STEP:2/2]"
 """
 
 _COORDINATE_SPACES = {
@@ -53,6 +65,40 @@ def _base_prompt(point_coords: str) -> str:
     coordinate_space, coordinate_units = _COORDINATE_SPACES[point_coords]
     return _BASE_PROMPT.format(
         coordinate_space=coordinate_space, coordinate_units=coordinate_units
+    )
+
+
+# Questions that usually need several clicks. Matching ones get a short
+# reminder appended to the request: smaller local models follow the
+# walkthrough format far more reliably when it's restated next to the
+# question than when it's only in the long system prompt.
+_HOWTO_RE = re.compile(
+    r"\b(how (do|can|would|should|to) (i|we|you)\b|how to\b|walk me through|show me how"
+    r"|steps? (to|for)\b|guide me|help me (set|make|create|change|find|add|turn|install"
+    r"|export|open|enable|disable|connect|move|delete|rename|save|share|upload))",
+    re.IGNORECASE,
+)
+
+
+def is_howto_question(text: str) -> bool:
+    return bool(_HOWTO_RE.search(text))
+
+
+def walkthrough_reminder(next_step: int | None = None) -> str:
+    """Instruction appended to a request so the model answers one step at a time.
+
+    ``next_step`` is the step being asked for in a walkthrough continuation;
+    None for the opening question.
+    """
+    if next_step is None:
+        return (
+            "(guide me one step at a time. each click or menu choice is its own step. "
+            "give only the first step, point at it, and end with [STEP:1/N], where N is "
+            "the total number of steps. use [STEP:1/1] if it really is one click.)"
+        )
+    return (
+        f"(look at the new screen. give only step {next_step}, point at it, and end with "
+        f"[STEP:{next_step}/N]. if the task is now finished, say so and leave out the step tag.)"
     )
 
 

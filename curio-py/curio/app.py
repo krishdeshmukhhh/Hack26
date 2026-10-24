@@ -36,6 +36,7 @@ from curio.screen_capture import capture_all
 from curio.state import VoiceState
 from curio.ui.companion_widget import CompanionWidget
 from curio.ui.history_window import HistoryWindow
+from curio.ui.response_bubble import ResponseBubble
 from curio.ui.tray_icon import TrayIcon
 
 APP_NAME = "Curio"
@@ -52,6 +53,31 @@ class BootstrapResult:
     was_first_run: bool
     config_path: Path
     log_dir: Path
+
+
+class _Overlays:
+    """The companion and its speech bubble, hidden together for screenshots."""
+
+    def __init__(self, companion: CompanionWidget, bubble: ResponseBubble) -> None:
+        self._companion = companion
+        self._bubble = bubble
+
+    def hide_for_capture(self) -> None:
+        self._companion.hide_for_capture()
+        self._bubble.hide_for_capture()
+
+    def restore_after_capture(self) -> None:
+        self._companion.restore_after_capture()
+        self._bubble.restore_after_capture()
+
+    def fly_to(self, x: int, y: int) -> None:
+        self._companion.fly_to(x, y)
+
+
+def _bubble_title(label: str, step: int, total: int) -> str | None:
+    if step:
+        return f"step {step} of {total}" + (f" · {label}" if label else "")
+    return label or None
 
 
 def _example_config_path() -> Path:
@@ -120,6 +146,7 @@ def run() -> int:
 
     tray_icon = TrayIcon()
     companion = CompanionWidget()
+    bubble = ResponseBubble(anchor=companion)
     history = HistoryWindow()
 
     mic = MicCapture()
@@ -174,11 +201,24 @@ def run() -> int:
             llm=llm,
             tts=tts,
             screen_capture_fn=capture_all,
-            panel_visibility_controller=companion,
+            panel_visibility_controller=_Overlays(companion, bubble),
         )
 
-        # State → companion
+        # State → companion and bubble
         manager.state_changed.connect(companion.set_state)
+        manager.state_changed.connect(bubble.on_state)
+
+        # Answer text, pointing target and walkthrough step → bubble
+        manager.response_delta.connect(bubble.append_delta)
+        manager.response_complete.connect(bubble.set_response)
+
+        def _annotate_bubble(label: str, step: int, total: int) -> None:
+            bubble.set_title(_bubble_title(label, step, total))
+            waiting = 0 < step < total
+            bubble.set_hint("do it, and i'll show the next step · esc to stop" if waiting else None)
+
+        manager.response_annotated.connect(_annotate_bubble)
+        manager.walkthrough_ended.connect(lambda: bubble.set_hint(None))
 
         # Start/stop output loopback capture based on state
         def _manage_output_capture(state: VoiceState) -> None:
@@ -207,6 +247,7 @@ def run() -> int:
             lambda msg: logger.error("error: %s", msg)
         )
         manager.error.connect(companion.flash_error)
+        manager.error.connect(bubble.show_error)
 
         # Transcription → history window
         manager.interim_transcript.connect(history.append_interim)
@@ -222,12 +263,16 @@ def run() -> int:
     hotkey_monitor.start()
     tray_icon.show()
     companion.show()
+    if result.config_error is not None:
+        # Without a valid config nothing else works; say so on screen.
+        bubble.show_error(f"config problem: {result.config_error}")
 
     # Ensure the pynput listener thread is stopped before the app exits,
     # otherwise Python may hang on interpreter shutdown waiting for it
     # (pynput's helper thread is not always daemonic on Windows).
     result.app.aboutToQuit.connect(hotkey_monitor.stop)
     result.app.aboutToQuit.connect(companion.hide)
+    result.app.aboutToQuit.connect(bubble.clear)
     result.app.aboutToQuit.connect(output_capture.stop)
 
     # Use qasync to bridge the Qt event loop with asyncio so that
