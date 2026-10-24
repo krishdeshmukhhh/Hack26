@@ -53,3 +53,14 @@ tts_engine = "kokoro"
 #         "bf_emma" (af/am = US female/male, bf/bm = UK).
 # system: part of a Windows voice name, such as "Zira". Empty = default.
 tts_voice = ""
+
+# Animated cursor companion. Tray menu > Pet changes species immediately and saves it.
+[pet]
+species = "fox"                 # fox, cat, red-panda, ferret
+profile = "auto"                # auto, playful, reserved, relaxed, energetic
+reduced_motion = false
+playful_idle = true
+jump_frequency = 1.0            # 0 disables jumps; multiplier from 0 to 5
+jump_height = 0.0               # 0-64 logical pixels; only clips allowing added arcs
+jump_speed = 1.0                # playback multiplier, 0.25-4
+sleep_after_seconds = 120       # inactivity threshold, 10-3600 seconds

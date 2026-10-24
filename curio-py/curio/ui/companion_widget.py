@@ -196,7 +196,7 @@ class CompanionWidget(QWidget):
             if not self.isVisible():
                 self.show()
                 self._animate_opacity(1.0, 300)
-        elif self._state == VoiceState.IDLE and self._mode == _Mode.FOLLOWING:
+        elif self._state == VoiceState.IDLE and not self._is_pointing():
             self.hide()
 
     # ------------------------------------------------------------------
@@ -236,7 +236,7 @@ class CompanionWidget(QWidget):
     def show_error(self, message: str) -> None:
         """Red flash plus a short red pill explaining what to check."""
         self.flash_error()
-        if self._mode in (_Mode.FLYING, _Mode.POINTING):
+        if self._is_pointing():
             return  # don't cover a pointer pill mid-point
         self.bubble.show_text(
             friendly_error(message), self._bubble_anchor(), color=ERROR_RED, auto_hide_ms=3500
@@ -341,6 +341,19 @@ class CompanionWidget(QWidget):
         self._flight_done = on_done
 
     def _on_frame(self) -> None:
+        self._advance_motion()
+        if self._state == VoiceState.PROCESSING:
+            self._spin_degrees = (self._spin_degrees + 360 * self.FRAME_MS / 800) % 360
+        if self.bubble.active and self._mode != _Mode.RETURNING:
+            self.bubble.move_to(self._bubble_anchor())
+        self.update()
+
+    # ------------------------------------------------------------------
+    # Subclass hooks (see ui/pet_widget.py)
+    # ------------------------------------------------------------------
+
+    def _advance_motion(self) -> None:
+        """Move one frame: fly along the current arc, or follow the cursor."""
         if self._mode in (_Mode.FLYING, _Mode.RETURNING) and self._flight_done is not None:
             if self._mode == _Mode.RETURNING:
                 moved = QPointF(QCursor.pos()) - self._return_cancel_origin
@@ -362,11 +375,9 @@ class CompanionWidget(QWidget):
         elif self._mode == _Mode.FOLLOWING:
             self._snap_to_cursor()
 
-        if self._state == VoiceState.PROCESSING:
-            self._spin_degrees = (self._spin_degrees + 360 * self.FRAME_MS / 800) % 360
-        if self.bubble.active and self._mode != _Mode.RETURNING:
-            self.bubble.move_to(self._bubble_anchor())
-        self.update()
+    def _is_pointing(self) -> bool:
+        """True while flying to, pointing at, or returning from a target."""
+        return self._mode != _Mode.FOLLOWING
 
     def _follow_point(self, cursor: QPointF) -> tuple[float, float]:
         return follow_center((cursor.x(), cursor.y()), _screen_rect(cursor))
@@ -391,7 +402,7 @@ class CompanionWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _greet(self) -> None:
-        if self._state == VoiceState.IDLE and self._mode == _Mode.FOLLOWING:
+        if self._state == VoiceState.IDLE and not self._is_pointing():
             self.bubble.show_text(WELCOME_TEXT, self._bubble_anchor(), auto_hide_ms=2000)
 
     def _animate_opacity(self, end: float, ms: int) -> None:
@@ -407,11 +418,7 @@ class CompanionWidget(QWidget):
 
     def _check_transient_hide(self) -> None:
         """Cursor toggled off: hide 1 s after speech and pointing are done."""
-        busy = (
-            self._state != VoiceState.IDLE
-            or self._mode != _Mode.FOLLOWING
-            or self.bubble.active
-        )
+        busy = self._state != VoiceState.IDLE or self._is_pointing() or self.bubble.active
         if busy:
             self._transient_idle_since = None
             return
