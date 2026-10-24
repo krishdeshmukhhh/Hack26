@@ -88,7 +88,7 @@ class LocalConfig:
             llm_model=llm_model,
             llm_api_key=_str("llm_api_key", ""),
             point_coords=point_coords,
-            whisper_model=_str("whisper_model", "small.en"),
+            whisper_model=_str("whisper_model", "base.en"),
             whisper_device=whisper_device,
             tts_engine=tts_engine,
             tts_voice=_str("tts_voice", ""),
