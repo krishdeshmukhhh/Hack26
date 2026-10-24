@@ -22,6 +22,7 @@ STATE_COLORS: dict[str, str] = {
     VoiceState.LISTENING.value: DS.Colors.accent_green,
     VoiceState.PROCESSING.value: DS.Colors.accent_blue,
     VoiceState.RESPONDING.value: DS.Colors.accent_amber,
+    VoiceState.GUIDING.value: DS.Colors.accent_green,
     "error": DS.Colors.error_red,
 }
 

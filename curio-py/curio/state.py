@@ -10,3 +10,5 @@ class VoiceState(StrEnum):
     LISTENING = "listening"
     PROCESSING = "processing"
     RESPONDING = "responding"
+    # Walkthrough: waiting at the current step's target for the user to do it.
+    GUIDING = "guiding"

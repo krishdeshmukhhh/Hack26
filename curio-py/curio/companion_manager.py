@@ -18,9 +18,10 @@ from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, Protocol
 
-from PySide6.QtCore import QByteArray, QObject, Signal
+from PySide6.QtCore import QByteArray, QObject, QTimer, Signal
 
 from curio.active_window import get_foreground_window_title
+from curio.click_watcher import ClickWatcher
 from curio.clients.kokoro_tts_client import KokoroTTSClient
 from curio.clients.llm_client import LLMClient
 from curio.clients.openai_llm_client import OpenAICompatLLMClient
@@ -34,12 +35,18 @@ from curio.hotkey import HotkeyMonitor
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
 from curio.mic_capture import MicCapture
 from curio.point_mapper import map_point_to_screen
-from curio.point_parser import parse_point_tag
-from curio.prompts import build_system_prompt
+from curio.point_parser import StepTag, parse_point_tag, parse_step_tag
+from curio.prompts import build_system_prompt, is_howto_question, walkthrough_reminder
 from curio.screen_capture import ScreenshotImage
 from curio.state import VoiceState
 
 logger = logging.getLogger(__name__)
+
+# After the user's click, give the app a moment to react (menus open,
+# dialogs appear) before taking the next step's screenshot.
+WALKTHROUGH_SETTLE_SECONDS = 0.8
+# Give up waiting for the user to do a step after this long.
+WALKTHROUGH_TIMEOUT_MS = 120_000
 
 
 class CaptureVisibilityController(Protocol):
@@ -75,6 +82,10 @@ class CompanionManager(QObject):
     response_complete = Signal(str)
     success_turn_completed = Signal()
     error = Signal(str)
+    # Once per answer: what the companion points at ("" if nothing) and the
+    # walkthrough step / total (0, 0 outside a walkthrough).
+    response_annotated = Signal(str, int, int)
+    walkthrough_ended = Signal()
 
     def __init__(
         self,
@@ -86,6 +97,7 @@ class CompanionManager(QObject):
         tts: TTSClient | SystemTTSClient | KokoroTTSClient,
         screen_capture_fn: Callable[[], list[ScreenshotImage]],
         panel_visibility_controller: CaptureVisibilityController,
+        click_watcher: ClickWatcher | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -109,6 +121,15 @@ class CompanionManager(QObject):
         self._current_screenshots: list[ScreenshotImage] = []
         self._speak_task: asyncio.Task[None] | None = None
 
+        # Guided walkthrough: the step the user is currently doing, if any.
+        self._walkthrough: StepTag | None = None
+        self._click_watcher = click_watcher or ClickWatcher(self)
+        self._click_watcher.clicked.connect(self._on_walkthrough_click)
+        self._walkthrough_timeout = QTimer(self)
+        self._walkthrough_timeout.setSingleShot(True)
+        self._walkthrough_timeout.setInterval(WALKTHROUGH_TIMEOUT_MS)
+        self._walkthrough_timeout.timeout.connect(self._on_walkthrough_timeout)
+
         # PCM deque bridge — same pattern as app.py.  Replaced on every
         # hotkey-press cycle so a stale generator cannot leak chunks.
         self._pcm: dict[str, Any] = {
@@ -121,6 +142,7 @@ class CompanionManager(QObject):
         hotkey.pressed.connect(self._on_hotkey_pressed)
         hotkey.released.connect(self._on_hotkey_released)
         hotkey.cancelled.connect(self._on_hotkey_cancelled)
+        hotkey.escape_pressed.connect(self._on_escape)
 
         mic.audio_level.connect(self.audio_level)
         mic.pcm_chunk.connect(self._on_pcm_chunk)
@@ -194,10 +216,9 @@ class CompanionManager(QObject):
     def _on_hotkey_pressed(self) -> None:
         logger.debug("hotkey pressed (state=%s)", self._state)
 
-        # Stop TTS playback immediately.
-        self._tts.stop()
-        if self._speak_task is not None and not self._speak_task.done():
-            self._speak_task.cancel()
+        # A new question ends any walkthrough in progress.
+        self._end_walkthrough()
+        self._stop_speaking()
 
         # Interrupt any in-flight turn OR lingering stream task.
         if self._state != VoiceState.IDLE:
@@ -267,8 +288,76 @@ class CompanionManager(QObject):
 
     def _on_error(self, msg: str) -> None:
         logger.error("companion error: %s", msg)
+        self._end_walkthrough()
         self.error.emit(msg)
         self._set_state(VoiceState.IDLE)
+
+    # ------------------------------------------------------------------
+    # Guided walkthroughs
+    # ------------------------------------------------------------------
+
+    def _stop_speaking(self) -> None:
+        self._tts.stop()
+        if self._speak_task is not None and not self._speak_task.done():
+            self._speak_task.cancel()
+
+    def _update_walkthrough(self, step: StepTag | None) -> None:
+        """Called once per answer with the answer's [STEP:k/n] tag, if any."""
+        if step is not None and step.has_more:
+            self._walkthrough = step
+            self._click_watcher.start()
+            self._walkthrough_timeout.start()
+            logger.info("walkthrough: waiting on step %d of %d", step.index, step.total)
+        else:
+            # Final step given, or the model stopped guiding.
+            self._end_walkthrough()
+
+    def _end_walkthrough(self) -> None:
+        was_active = self._walkthrough is not None
+        self._walkthrough = None
+        self._click_watcher.stop()
+        self._walkthrough_timeout.stop()
+        if was_active:
+            logger.info("walkthrough ended")
+            self.walkthrough_ended.emit()
+        if self._state == VoiceState.GUIDING:
+            self._set_state(VoiceState.IDLE)
+
+    def _on_walkthrough_click(self) -> None:
+        step = self._walkthrough
+        if step is None or self._state not in (VoiceState.RESPONDING, VoiceState.GUIDING):
+            return
+        logger.info("walkthrough: step %d done, fetching the next one", step.index)
+        # One click per step; the next answer re-arms the watcher.
+        self._click_watcher.stop()
+        self._walkthrough_timeout.stop()
+        self._stop_speaking()
+        self._set_state(VoiceState.PROCESSING)
+        self._cancel_flag = False
+        self._current_task = asyncio.ensure_future(self._continue_walkthrough(step))
+
+    async def _continue_walkthrough(self, step: StepTag) -> None:
+        try:
+            await asyncio.sleep(WALKTHROUGH_SETTLE_SECONDS)
+        except asyncio.CancelledError:
+            self._set_state(VoiceState.IDLE)
+            return
+        await self._run_turn(f"i did step {step.index}. what's next?", continuing_step=step.index)
+
+    def _on_escape(self) -> None:
+        if self._walkthrough is None and self._state != VoiceState.GUIDING:
+            return
+        self._stop_speaking()
+        if self._current_task is not None and not self._current_task.done():
+            self._cancel_flag = True
+            self._current_task.cancel()
+        self._end_walkthrough()
+        self._set_state(VoiceState.IDLE)
+
+    def _on_walkthrough_timeout(self) -> None:
+        if self._walkthrough is not None and self._state == VoiceState.GUIDING:
+            logger.info("walkthrough timed out waiting for a click")
+            self._end_walkthrough()
 
     # ------------------------------------------------------------------
     # TTS playback (async, fire-and-forget)
@@ -284,16 +373,17 @@ class CompanionManager(QObject):
             logger.error("TTS error: %s", exc)
             self.error.emit(str(exc))
         finally:
-            # Only transition to IDLE if we're still RESPONDING
-            # (a new hotkey press may have already changed state)
+            # Only leave RESPONDING if we're still in it (a new hotkey
+            # press or a walkthrough click may have already moved on).
             if self._state == VoiceState.RESPONDING:
-                self._set_state(VoiceState.IDLE)
+                waiting = self._walkthrough is not None
+                self._set_state(VoiceState.GUIDING if waiting else VoiceState.IDLE)
 
     # ------------------------------------------------------------------
     # Turn pipeline (async)
     # ------------------------------------------------------------------
 
-    async def _run_turn(self, text: str) -> None:
+    async def _run_turn(self, text: str, *, continuing_step: int | None = None) -> None:
         """Execute the full turn: screen capture → LLM request → history.
 
         This coroutine becomes ``_current_task`` and supports cancellation
@@ -338,9 +428,15 @@ class CompanionManager(QObject):
                     }
                 )
 
-            # Build messages from conversation history.
+            # Build messages from conversation history. Walkthrough reminders
+            # go only into this request, not into the stored history.
+            request_text = text
+            if continuing_step is not None:
+                request_text = f"{text}\n{walkthrough_reminder(continuing_step + 1)}"
+            elif is_howto_question(text):
+                request_text = f"{text}\n{walkthrough_reminder()}"
             messages = self._history.messages_for_request(
-                current_user_text=text,
+                current_user_text=request_text,
                 current_images=image_blocks,
             )
 
@@ -378,8 +474,16 @@ class CompanionManager(QObject):
                 self.response_complete.emit(full_text)
                 self.success_turn_completed.emit()
 
-                # Parse POINT tag — strip from TTS text, fly companion if found.
-                spoken_text, point_tag = parse_point_tag(full_text)
+                # Strip STEP and POINT tags from the spoken text, fly the
+                # companion to the target, and track walkthrough progress.
+                without_step, step = parse_step_tag(full_text)
+                spoken_text, point_tag = parse_point_tag(without_step)
+                self.response_annotated.emit(
+                    point_tag.label if point_tag is not None else "",
+                    step.index if step is not None else 0,
+                    step.total if step is not None else 0,
+                )
+                self._update_walkthrough(step)
                 if point_tag is not None:
                     coords = map_point_to_screen(
                         point_tag, self._current_screenshots, self._config.point_coords
