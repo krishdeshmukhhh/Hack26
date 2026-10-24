@@ -39,10 +39,16 @@ llm_api_key = ""
 # Coordinate format the model uses for pointing. "norm1000" for Qwen3-VL,
 # "pixel" for Qwen2.5-VL and most other models.
 point_coords = "norm1000"
-# faster-whisper model: "base.en" (fast), "small.en" (more accurate),
-# "large-v3" (best, wants whisper_device = "cuda").
-whisper_model = "base.en"
+# faster-whisper model: "small.en" (good balance), "base.en" (faster, less
+# accurate), "large-v3" (best, wants whisper_device = "cuda").
+whisper_model = "small.en"
 # "cpu" works everywhere. "cuda" needs the CUDA 12 cuBLAS/cuDNN DLLs on PATH.
 whisper_device = "cpu"
-# Part of a Windows voice name, for example "Aria" or "Zira". Empty = default.
+# Voice engine: "kokoro" (natural neural voice, runs on this PC; ~350 MB
+# model downloaded on first run) or "system" (built-in Windows voices).
+# If Kokoro can't load, Curio falls back to the Windows voice.
+tts_engine = "kokoro"
+# kokoro: a voice id such as "af_heart" (default), "af_bella", "am_michael",
+#         "bf_emma" (af/am = US female/male, bf/bm = UK).
+# system: part of a Windows voice name, such as "Zira". Empty = default.
 tts_voice = ""

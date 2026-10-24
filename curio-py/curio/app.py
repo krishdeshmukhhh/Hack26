@@ -19,6 +19,7 @@ import qasync
 from platformdirs import user_config_dir, user_log_dir
 from PySide6.QtWidgets import QApplication
 
+from curio.clients.kokoro_tts_client import KokoroTTSClient
 from curio.clients.llm_client import LLMClient
 from curio.clients.openai_llm_client import OpenAICompatLLMClient
 from curio.clients.system_tts_client import SystemTTSClient
@@ -146,6 +147,7 @@ def run() -> int:
     # CompanionManager (only when config loaded successfully)
     # ------------------------------------------------------------------
     transcription: TranscriptionClient | WhisperTranscriptionClient | None = None
+    tts: TTSClient | SystemTTSClient | KokoroTTSClient | None = None
     if result.config is not None:
         local = result.config.local
         if local is not None:
@@ -156,7 +158,10 @@ def run() -> int:
             llm = OpenAICompatLLMClient(
                 base_url=local.llm_base_url, api_key=local.llm_api_key
             )
-            tts = SystemTTSClient(voice=local.tts_voice)
+            if local.tts_engine == "kokoro":
+                tts = KokoroTTSClient(voice=local.tts_voice, fallback=SystemTTSClient())
+            else:
+                tts = SystemTTSClient(voice=local.tts_voice)
         else:
             transcription = TranscriptionClient(worker_url=result.config.worker_url)
             llm = LLMClient(worker_url=result.config.worker_url)
@@ -234,8 +239,10 @@ def run() -> int:
     signal.signal(signal.SIGINT, lambda *_: result.app.quit())
 
     with loop:
+        # Load local models up front so the first question isn't slow.
         if isinstance(transcription, WhisperTranscriptionClient):
-            # Load Whisper up front so the first question isn't slow.
             loop.create_task(transcription.preload())
+        if isinstance(tts, KokoroTTSClient):
+            loop.create_task(tts.preload())
         loop.run_forever()
     return 0

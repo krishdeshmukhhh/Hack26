@@ -25,6 +25,7 @@ ALLOWED_BACKENDS = {"cloud", "local"}
 # "norm1000": POINT coords are on a 0-1000 grid (Qwen3-VL's native grounding format).
 ALLOWED_POINT_COORDS = {"pixel", "norm1000"}
 ALLOWED_WHISPER_DEVICES = {"cpu", "cuda"}
+ALLOWED_TTS_ENGINES = {"kokoro", "system"}
 
 
 class ConfigError(Exception):
@@ -41,6 +42,7 @@ class LocalConfig:
     point_coords: str
     whisper_model: str
     whisper_device: str
+    tts_engine: str
     tts_voice: str
 
     @classmethod
@@ -74,13 +76,21 @@ class LocalConfig:
                 f"got {whisper_device!r}"
             )
 
+        tts_engine = _str("tts_engine", "kokoro")
+        if tts_engine not in ALLOWED_TTS_ENGINES:
+            raise ConfigError(
+                f"local.tts_engine must be one of {sorted(ALLOWED_TTS_ENGINES)}, "
+                f"got {tts_engine!r}"
+            )
+
         return cls(
             llm_base_url=llm_base_url,
             llm_model=llm_model,
             llm_api_key=_str("llm_api_key", ""),
             point_coords=point_coords,
-            whisper_model=_str("whisper_model", "base.en"),
+            whisper_model=_str("whisper_model", "small.en"),
             whisper_device=whisper_device,
+            tts_engine=tts_engine,
             tts_voice=_str("tts_voice", ""),
         )
 
