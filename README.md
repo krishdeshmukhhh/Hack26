@@ -29,7 +29,7 @@ Built for Windows developers, creatives, and anyone learning unfamiliar software
 - **Text-to-speech responses** via ElevenLabs with real-time output waveform
 - **Cursor guidance** — companion flies to UI elements Claude references
 - **Knowledge base injection** — curated markdown docs loaded per-app based on active window, so Claude gives authoritative answers for niche software
-- **Conversation memory** — 20-turn history so follow-up questions have full context
+- **Conversation memory** — 10-exchange history so follow-up questions have full context
 - **Interrupt support** — press Ctrl+Alt mid-response to cut the audio and ask something new
 - **History window** — optional scrollable transcript accessible from the tray menu
 

@@ -82,7 +82,7 @@ Added `backend = "local"`:
   - Default onnxruntime settings were 6–9× slower once other threads were busy, so it now uses 8 threads with spinning off (0.23× real time on the laptop CPU).
   - Falls back to the Windows voice if Kokoro can't load.
 - **Whisper `small.en` tried and reverted.** It took 2–5 s per question on the laptop CPU against 0.7–1.4 s for `base.en`, and transcribed our test sentence no better. The default stays `base.en`; `small.en` makes sense only with `whisper_device = "cuda"`.
-- **Speech bubble** next to the triangle. The original Curio had one; the Windows port never built it.
+- **Speech bubble** next to the triangle, streaming the whole answer. *Replaced later the same day, see "Matching macOS Curio" below.*
   - Streams the answer, keeping the newest lines.
   - Titles the pointing target and walkthrough step.
   - Shows errors in plain words, including config errors at startup, which used to fail silently.
@@ -91,10 +91,19 @@ Added `backend = "local"`:
   - Live testing showed the 30B model mostly ignores the step format when it's only in the system prompt. A short reminder appended to how-to requests fixed it: 4 of 4 runs tagged correctly, and ordinary questions stayed untagged.
   - Not yet tried by hand through a full real walkthrough.
 
+### Matching macOS Curio
+Read the original's Swift source to match its overlay exactly; see the table in
+[ARCHITECTURE.md](ARCHITECTURE.md#matching-macos-curio).
+- The original never shows answer text (`CompanionResponseOverlay` is dead code), so the transcript bubble was removed.
+- Pointing now uses the original's curved, rotating, swelling flight, lands just beside the target (the old code landed ~17 px left of it), and pops a typed "right here!"-style pill, then flies back.
+- Waveform and spinner replace the triangle while listening and thinking, as on Mac; the triangle keeps following the cursor while speaking.
+- Launch fade-in plus "hey! i'm curio"; tray **Show Curio** toggle; history trimmed to 10 tagless exchanges.
+- Verified with screenshots of every state, plus 9 geometry tests.
+
 ## Current status
 
 Working end to end, with no API keys: voice → Whisper → Qwen3-VL on the H100
-→ Kokoro voice + pointing + speech bubble. Guided walkthroughs are built and
+→ Kokoro voice + Mac-style pointing. Guided walkthroughs are built and
 unit-tested, and the model follows the format live, but nobody has tried a
 full walkthrough by hand yet.
 

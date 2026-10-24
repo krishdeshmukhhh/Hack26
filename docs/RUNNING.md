@@ -110,9 +110,12 @@ A blue triangle appears next to your cursor and an icon in the system tray.
 1. Click on a normal window (not an admin PowerShell).
 2. **Hold Ctrl+Alt**; the triangle becomes a waveform.
 3. Ask your question out loud, then **release**.
-4. A bubble next to the triangle says "thinking…", then shows the answer as
-   it's spoken. The triangle flies to whatever it's describing, and the
-   bubble's title names it.
+4. The waveform turns into a small spinner while it thinks, then the
+   triangle comes back and it answers out loud.
+5. If it's talking about something on screen, the triangle flies over in an
+   arc, lands next to it, and a little blue pill pops up ("right here!",
+   "found it!"…). After a few seconds it flies back to your cursor. Move
+   the mouse during the return flight to snap it back straight away.
 
 Press Ctrl+Alt while it's talking to interrupt. Tray menu → **History** has
 the full transcript.
@@ -121,8 +124,8 @@ the full transcript.
 change my wallpaper?" or "walk me through exporting this video". Instead of
 listing every step, Curio gives **one step at a time**:
 
-1. It says step 1, flies to where you need to click, and the bubble shows
-   "step 1 of 4 · …".
+1. It says step 1, flies to where you need to click, and the pill shows
+   the step, e.g. "click this! (1/4)". It stays there until you click.
 2. **Do the step** (click where it pointed). Your click tells Curio you're
    done. It takes a fresh screenshot and tells you step 2, based on what's
    on screen now.
@@ -153,7 +156,8 @@ also gives up after 2 minutes without a click. Any left click counts as
 | No sound | Check the volume and default output device. If Kokoro failed to load, the log says why and Curio uses the Windows voice instead. |
 | Voice sounds robotic | That's the Windows voice: Kokoro is off (`tts_engine = "system"`) or failed to load (see the log). |
 | Walkthrough stops after the first step | The model gave a one-step answer (`[STEP:1/1]`) or no step tag. Ask "what's next?" with Ctrl+Alt, or rephrase as "walk me through…". |
-| Bubble shows "something went wrong" | The message says what to check. It's also in the log. |
+| A red pill appears next to the triangle | Something failed; the pill says what to check (VPN, tunnel, API key, config). Details are in the log. |
+| I don't want the triangle on screen all the time | Tray icon → untick **Show Curio**. It then appears only while you're using it and fades out a second after. |
 
 Debug logging: set `log_level = "DEBUG"` in `config.toml`. **This also logs
 every key you press**, so set it back to `INFO` afterwards and clear the log.

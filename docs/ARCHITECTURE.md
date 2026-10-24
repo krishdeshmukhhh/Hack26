@@ -9,10 +9,10 @@ asyncio on Qt's event loop, so network I/O never blocks the UI.
  Ctrl+Alt down          release              transcript            answer streamed           done
 ──────┬────────────────────┬────────────────────────┬──────────────────────────┬───────────────┬──
  IDLE │ LISTENING          │ PROCESSING             │ RESPONDING               │ IDLE, or
-      │ mic → PCM buffer   │ STT finishes           │ LLM streams into bubble  │ GUIDING if a
-      │ (waveform shown)   │ hide overlays          │ parse STEP + POINT tags  │ walkthrough
-      │                    │ screenshot all screens │ fly cursor to target     │ step is open
-      │                    │ load knowledge base    │ speak the answer         │
+      │ mic → PCM buffer   │ STT finishes           │ parse STEP + POINT tags  │ GUIDING if a
+      │ (waveform shown)   │ hide overlay           │ fly to target + pill     │ walkthrough
+      │                    │ screenshot all screens │ speak the answer         │ step is open
+      │                    │ LLM answers (spinner)  │                          │
 ```
 
 `CompanionManager` (`curio/companion_manager.py`) owns this state machine.
@@ -31,8 +31,9 @@ signals and methods in both backends.
 | `prompts.py` | The system prompt: voice style, POINT-tag rules, coordinate format, knowledge base. |
 | `point_parser.py` / `point_mapper.py` | Parse `[POINT:x,y:label:screenN]` and map it to real screen pixels. |
 | `knowledge_base.py` | Per-app markdown docs chosen by the foreground window title. |
-| `ui/companion_widget.py` | The cursor-following triangle, waveform and fly-to animation. |
-| `ui/response_bubble.py` | Speech bubble that follows the triangle: streamed answer, target/step title, errors. |
+| `ui/companion_widget.py` | The buddy, matching macOS Curio: triangle (idle/speaking), waveform (listening), spinner (thinking), arc flights, point-and-return, launch greeting, transient show/hide. |
+| `ui/flight.py` | Pure geometry for flights: bezier arc, duration, rotation, scale, follow and landing offsets. |
+| `ui/pointer_bubble.py` | Small blue pill typed out letter by letter ("right here!", "hey! i'm curio"), red for errors. |
 | `ui/window_effects.py` | Win32 setup shared by both overlays (click-through, no Windows 11 border or shadow). |
 | `click_watcher.py` | Global left-click listener used to advance walkthroughs. |
 | `ui/history_window.py`, `ui/tray_icon.py` | Transcript window and tray menu. |
@@ -73,7 +74,7 @@ For how-to questions the model answers one step at a time and tags each
 answer with `[STEP:k/N]` next to its POINT tag.
 
 1. `parse_step_tag` strips the STEP tag, then `parse_point_tag` the POINT tag.
-   `response_annotated(label, k, N)` feeds the bubble's title.
+   The companion flies there with `hold=True` and a "(k/N)" suffix on its pill.
 2. If `k < N`, the manager stores the step, starts `ClickWatcher`, and after
    speaking enters **GUIDING**: the companion stays on the target.
 3. The next left click → `PROCESSING` → wait 0.8 s for the UI to react →
@@ -97,6 +98,29 @@ off; with the defaults, synthesis was 6–9× slower once other threads were
 busy. Model files download to `%LOCALAPPDATA%\Curio\models\kokoro` on
 first use.
 
+## Matching macOS Curio
+
+The overlay follows the original's `OverlayWindow.swift` and
+`CompanionManager.swift`:
+
+| Behaviour | Value |
+|---|---|
+| Follow offset from cursor | +35, +25 px |
+| Answer text on screen | none: spinner while thinking, then speech only |
+| Flight | quadratic bezier bowing up by min(20% of distance, 80 px); smoothstep easing; 0.6–1.4 s (distance/800); triangle faces its travel direction and swells to 1.3× mid-flight |
+| Landing | target +8, +12 px |
+| Pointer pill | random phrase from "right here!", "this one!", "over here!", "click this!", "here it is!", "found it!"; typed 30–60 ms per character; pops in from 0.5× with a glow; holds 3 s, fades 0.5 s, flies back |
+| Return flight | cancelled if the mouse moves >100 px; snaps back to following |
+| Launch | fade in over 2 s, then "hey! i'm curio" for 2 s |
+| Show Curio off | appears on push-to-talk, hides 1 s after speech and pointing finish |
+| History | last 10 exchanges, tags stripped |
+| Colour | `#3380FF` |
+
+Deliberate differences: errors show a short red pill (the original speaks a
+canned message), and walkthrough steps hold at the target until clicked.
+The onboarding video, email capture, analytics and permissions panel aren't
+ported.
+
 ## Model server
 
 vLLM runs on one GPU of a lab workstation, bound to `127.0.0.1` with an API
@@ -112,7 +136,7 @@ uv run ruff check .
 ```
 
 The parsers, config validation, coordinate mapping, message conversion,
-Whisper buffering, hotkey stuck-key handling, the bubble's text wrapping,
+Whisper buffering, hotkey stuck-key handling, flight geometry, pill text,
 Kokoro's chunking and fallback, and the full walkthrough flow (with fake
 clients) are unit-tested. The overlay rendering, audio devices and live
 servers aren't.
