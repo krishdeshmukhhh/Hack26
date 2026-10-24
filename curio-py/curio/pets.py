@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from curio.pet_motion import PursuitMotion
+
 
 @dataclass(frozen=True)
 class Clip:
@@ -109,13 +111,15 @@ class BehaviorProfile:
     idle_interval: tuple[float, float]
     hop_probability: float
     cooldown: float
+    follow_delay: float
+    move_speed: float
 
 
 PROFILES = {
-    "playful": BehaviorProfile((18.0, 35.0), 0.18, 10.0),
-    "reserved": BehaviorProfile((35.0, 65.0), 0.08, 18.0),
-    "relaxed": BehaviorProfile((28.0, 50.0), 0.12, 14.0),
-    "energetic": BehaviorProfile((12.0, 25.0), 0.25, 8.0),
+    "playful": BehaviorProfile((6.0, 12.0), 0.55, 4.0, 0.4, 190.0),
+    "reserved": BehaviorProfile((12.0, 22.0), 0.40, 5.0, 0.6, 155.0),
+    "relaxed": BehaviorProfile((9.0, 18.0), 0.45, 5.0, 0.65, 135.0),
+    "energetic": BehaviorProfile((4.0, 9.0), 0.60, 3.0, 0.25, 230.0),
 }
 
 
@@ -136,6 +140,7 @@ class BehaviorController:
         self.profile = PROFILES.get(profile_name, PROFILES["playful"])
         self.clips = SpriteCatalog(settings.species).clips if clips is None else clips
         self.position = (0.0, 0.0)
+        self._motion = PursuitMotion()
         self.action = "idle"
         self.facing_left = False
         self.vertical_offset = 0.0
@@ -151,10 +156,12 @@ class BehaviorController:
         self._last_optional: str | None = None
         self._last_destination: tuple[float, float] | None = None
         self._traversal_checked = False
+        self._hop_distance = 0.0
         self._reaction_remaining = 0.0
         self._point: tuple[float, float] | None = None
         self._point_hold = 0.0
         self._settled = False
+        self._arrival_cooldown = 0.0
 
     def reconfigure(self, settings: Any, clips: dict[str, Clip]) -> None:
         """Change appearance/profile without losing streaming or target lifecycle."""
@@ -232,6 +239,7 @@ class BehaviorController:
         dt = max(0.0, dt)
         reduced = self.settings.reduced_motion
         self._cooldown = max(0.0, self._cooldown - dt)
+        self._arrival_cooldown = max(0.0, self._arrival_cooldown - dt)
         self._reaction_remaining = max(0.0, self._reaction_remaining - dt)
         cursor_changed = (
             self._last_destination is not None
@@ -259,19 +267,20 @@ class BehaviorController:
         distance = math.dist((x, y), target)
         if abs(target[0] - x) > 2:
             self.facing_left = target[0] < x
-        # A monitor transfer must never interpolate through a display gap.
-        if not (left <= x <= right and top <= y <= bottom) or reduced:
-            nx, ny = target
-        else:
-            tau = 0.045 if distance > 240 else 0.09
-            alpha = 1 - math.exp(-dt / tau)
-            nx, ny = x + (target[0] - x) * alpha, y + (target[1] - y) * alpha
-            if math.dist((nx, ny), target) < 0.5:
-                nx, ny = target
-        self.position = (max(left, min(right, nx)), max(top, min(bottom, ny)))
-        speed = math.dist((x, y), self.position) / max(dt, 0.000001)
-        self._stationary = self._stationary + dt if speed < 5 else 0.0
-        moving = distance > 1 and (speed >= 5 or self._stationary < 0.25)
+        # Pursuit has its own reaction delay and speed; animation never drives it.
+        # Keep the public position assignable for monitor transfer and first show.
+        self._motion.position = self.position
+        self.position = self._motion.update(
+            dt,
+            target,
+            bounds,
+            immediate=self.point_active,
+            reduced=reduced,
+            delay=self.profile.follow_delay,
+            speed=self.profile.move_speed,
+            arrival_radius=0.5 if self.point_active else 16.0,
+        )
+        moving = self._motion.moving
         if moving and self._optional in {"attentive", "alternative", "settle"}:
             self._clear_optional()
         if self._point is not None and math.dist(self.position, target) < 2:
@@ -296,6 +305,16 @@ class BehaviorController:
             and self._idle_time < self.settings.sleep_after_seconds
         )
         if (
+            self._motion.just_arrived
+            and can_play
+            and not self._optional
+            and self.settings.jump_frequency > 0
+            and self._arrival_cooldown <= 0
+            and "jump" in self.clips
+        ):
+            self._start_optional("jump")
+            self._arrival_cooldown = max(4.0, self.profile.cooldown)
+        if (
             not active
             and not moving
             and not self._optional
@@ -307,7 +326,13 @@ class BehaviorController:
                 self._start_optional("settle")
         if not moving:
             self._traversal_checked = False
-        elif not self._traversal_checked and 120 <= distance <= 240:
+            self._hop_distance = 0.0
+        else:
+            self._hop_distance += math.dist((x, y), self.position)
+            if self._hop_distance >= 160:
+                self._traversal_checked = False
+                self._hop_distance = 0.0
+        if moving and not self._traversal_checked and distance >= 100:
             self._traversal_checked = True
             probability = min(1.0, self.profile.hop_probability * self.settings.jump_frequency)
             if (
