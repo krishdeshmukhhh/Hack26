@@ -162,7 +162,8 @@ also gives up after 2 minutes without a click. Any left click counts as
 | The cursor points at the wrong spot | Check `point_coords` matches the model (`norm1000` for Qwen3-VL). Run `./test_vision.sh` on the server: if it passes, the problem is on the laptop side. |
 | No sound | Check the volume and default output device. If Kokoro failed to load, the log says why and Curio uses the Windows voice instead. |
 | Voice sounds robotic | That's the Windows voice: Kokoro is off (`tts_engine = "system"`) or failed to load (see the log). |
-| Walkthrough stops after the first step | The model gave a one-step answer (`[STEP:1/1]`) or no step tag. Ask "what's next?" with Ctrl+Alt, or rephrase as "walk me through…". |
+| It answers in one go instead of step by step | The question didn't sound like a how-to (often Whisper mishearing it). Start with "how do I…" or "walk me through…". The log line `walkthrough: waiting on step 1` confirms a walkthrough started. |
+| Walkthrough doesn't move on | Curio waits for a **left** click after each step. A right-click doesn't count, so right-click as told, then left-click the menu item. |
 | A red pill appears next to the triangle | Something failed; the pill says what to check (VPN, tunnel, API key, config). Details are in the log. |
 | I don't want the triangle on screen all the time | Tray icon → untick **Show Curio**. It then appears only while you're using it and fades out a second after. |
 
