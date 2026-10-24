@@ -1,5 +1,74 @@
 # Progress log
 
+## Tutorial file uploads - 2026-10-24
+
+Added an explicit local file chooser alongside tutorial URL preview. TXT,
+Markdown, HTML and text-based PDFs feed the existing attributed plan and coaching
+flow. Bounds: 2 MB, 60,000 characters, 800 blocks and 100 PDF pages. Text extraction
+runs off the UI thread; QtPdf needs no additional dependency. Absolute local paths
+are excluded from model requests; references retain filename and source location.
+No file copy or automatic persistent memory is created. Scanned/encrypted PDFs
+and unsupported formats fail before model inference rather than fabricating content.
+
+Full suite: **397 passed** on Python 3.12.15 with cache disabled and a unique
+temporary base. Eight new tests cover formats/provenance, real PDF extraction,
+empty/binary/oversize/invalid inputs, absent PDF text, plan reuse and the file-picker
+UI flow. Scoped tutorial/upload Ruff passes. Physical native file dialog and live
+provider smoke remain unverified. Previous Git permission restrictions still apply.
+
+## Tutorial URL coach and live tutor integration - 2026-10-24
+
+Integrated the available feature source additions into the `main` working tree
+at baseline `integration snapshot`. Both named feature branch refs are absent; no branch merge
+is claimed. Staging the reviewed integration failed because `.git/index.lock`
+could not be created (permission denied). No integration commit was created.
+Reviewed the shared contract and each package, tests and handoff before
+wiring app startup, separate configured provider clients, tray entries, a shared
+scrollable window, explicit active-mode selection and one transcript dispatcher.
+Existing tracked memory contracts/runtime remain unchanged.
+
+Coaching final replies use existing TTS; ordinary assistant streaming, screenshots,
+memory and POINT/walkthrough behavior remain covered by their original tests.
+Mode switch/Stop/Escape/close interrupt old work and restore ordinary assistance.
+Late results, even from cancellation-suppressing providers, cannot replace current
+work. Hints for a revised math problem are discarded. Shutdown awaits widget-owned
+tasks, disconnects callbacks and destroys Qt objects on the GUI thread. An early
+combined run hit a native Qt access violation; explicit lifecycle cleanup was
+added and subsequent focused and full runs passed. Physical desktop shutdown
+remains unverified.
+
+Verified on Windows, Python 3.12.15:
+
+- `uv run pytest`: **389 passed**. Existing environment selected with
+  `UV_NO_SYNC=true`; UV cache redirected into the workspace. `PYTEST_ADDOPTS`
+  disabled cache and selected a new unique temporary base to avoid earlier ACL
+  problems. No tests excluded.
+- Nine integration tests cover URL -> attributed editable preview -> start ->
+  mismatched-screen recovery -> stop; a polynomial integral with an incorrect
+  differential, hint/correction, exact final differentiation and independent
+  practice; one voice owner and return to ordinary mode; explicit screenshot
+  comparison/recognition confirmation; cancellation, stale-problem hints, UI
+  reopen, disabled-memory isolation and awaited capture shutdown.
+- Models, URLs, screenshots and TTS are mocked in tests. Mathematical verdicts
+  use the real exact checker, not model assertions. Tutorial screen comparisons
+  stay `needs_clarification` without an independent verifier.
+- Changed/new coaching components and integration tests pass Ruff.
+  `uv run ruff check .` still fails on **23 pre-existing violations in unchanged
+  client/hotkey/geometry/test files**. No lint suppressions or unrelated fixes.
+- Offscreen Qt controls and a rendered tutoring window were inspected. The
+  inspection harness explicitly loaded Segoe UI because offscreen Qt exposed no
+  fonts. Computer Use native-pipe discovery failed after retries/reset; no
+  physical Windows UI, real microphone/audio, live model/vision or live URL smoke
+  is claimed.
+
+No additional symbolic dependency: the reviewed checker uses standard-library
+bounded AST parsing and Fraction arithmetic. This slice supports polynomial
+substitution only. Videos require actual supplied transcripts; JavaScript-only,
+authenticated/PDF pages and automatic transcript retrieval are unsupported.
+Live-provider accuracy, real capture/recognition, focus/multiple displays,
+interrupting audible TTS and frozen application startup still need manual checks.
+See RUNNING.md and coaching-integration.md.
+
 What's been done on Curio for HackOhio 2026, why, and what's next.
 Newest entries at the bottom of each section.
 

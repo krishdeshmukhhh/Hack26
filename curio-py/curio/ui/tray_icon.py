@@ -24,6 +24,9 @@ class TrayIcon(QSystemTrayIcon):
 
     show_history_requested = Signal()
     show_memory_requested = Signal()
+    show_tutorial_requested = Signal()
+    show_tutor_requested = Signal()
+    assistant_requested = Signal()
     show_settings_requested = Signal()
     # "Show Curio" toggled. Off hides the cursor except during an interaction,
     # like the macOS menu bar toggle. Persisted across launches.
@@ -56,6 +59,15 @@ class TrayIcon(QSystemTrayIcon):
         memory_action = QAction("Memories", menu)
         memory_action.triggered.connect(self.show_memory_requested.emit)
         menu.addAction(memory_action)
+
+        for label, requested in (
+            ("Tutorial URL coach", self.show_tutorial_requested),
+            ("Live integral tutor", self.show_tutor_requested),
+            ("Return to ordinary assistant", self.assistant_requested),
+        ):
+            action = QAction(label, menu)
+            action.triggered.connect(lambda _checked=False, signal=requested: signal.emit())
+            menu.addAction(action)
 
         pet_menu = menu.addMenu("Pet")
         self._pet_group = QActionGroup(self)

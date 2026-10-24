@@ -17,6 +17,7 @@ from pathlib import Path
 
 import qasync
 from platformdirs import user_config_dir, user_log_dir
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 
 from curio.clients.kokoro_tts_client import KokoroTTSClient
@@ -26,6 +27,7 @@ from curio.clients.system_tts_client import SystemTTSClient
 from curio.clients.transcription_client import TranscriptionClient
 from curio.clients.tts_client import TTSClient
 from curio.clients.whisper_transcription_client import WhisperTranscriptionClient
+from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.companion_manager import CompanionManager
 from curio.config import Config, ConfigError
 from curio.hotkey import HotkeyMonitor
@@ -34,6 +36,7 @@ from curio.memory_runtime import MemoryRuntime
 from curio.mic_capture import MicCapture
 from curio.pet_config import PetSettings, save_pet_selection
 from curio.screen_capture import capture_all
+from curio.ui.coaching_window import CoachingWindow
 from curio.ui.history_window import HistoryWindow
 from curio.ui.memory_window import MemoryWindow
 from curio.ui.pet_widget import PetCompanionWidget
@@ -43,6 +46,15 @@ APP_NAME = "Curio"
 APP_AUTHOR = "Curio"
 
 logger = logging.getLogger(__name__)
+
+
+def _configured_llm(config: Config):
+    """Separate clients keep coaching deltas out of the ordinary voice stream."""
+    if config.local is not None:
+        return OpenAICompatLLMClient(
+            base_url=config.local.llm_base_url, api_key=config.local.llm_api_key
+        )
+    return LLMClient(worker_url=config.worker_url)
 
 
 @dataclass
@@ -161,6 +173,8 @@ def run() -> int:
     tts: TTSClient | SystemTTSClient | KokoroTTSClient | None = None
     memory_runtime = None
     memory_window = None
+    coaching_runtime = None
+    coaching_window = None
     if result.config is not None:
         memory_runtime = MemoryRuntime(result.config.memory, config_path=result.config_path)
         memory_window = MemoryWindow(
@@ -172,13 +186,11 @@ def run() -> int:
         tray_icon.show_memory_requested.connect(memory_window.activateWindow)
         memory_window.settings_changed.connect(memory_window.set_settings)
         local = result.config.local
+        llm = _configured_llm(result.config)
         if local is not None:
             logger.info("local backend: %s at %s", local.llm_model, local.llm_base_url)
             transcription = WhisperTranscriptionClient(
                 model_name=local.whisper_model, device=local.whisper_device
-            )
-            llm = OpenAICompatLLMClient(
-                base_url=local.llm_base_url, api_key=local.llm_api_key
             )
             if local.tts_engine == "kokoro":
                 tts = KokoroTTSClient(voice=local.tts_voice, fallback=SystemTTSClient())
@@ -186,7 +198,6 @@ def run() -> int:
                 tts = SystemTTSClient(voice=local.tts_voice)
         else:
             transcription = TranscriptionClient(worker_url=result.config.worker_url)
-            llm = LLMClient(worker_url=result.config.worker_url)
             tts = TTSClient(worker_url=result.config.worker_url)
         manager = CompanionManager(
             config=result.config,
@@ -199,6 +210,41 @@ def run() -> int:
             panel_visibility_controller=companion,
             memory=memory_runtime.conversation,
         )
+
+        capture_lock = asyncio.Lock()
+
+        async def capture_for_coaching():
+            # Only the feature's explicit share-screen button calls this adapter.
+            async with capture_lock:
+                mode = coaching_runtime.mode
+                visible = [w for w in (coaching_window, history, memory_window)
+                           if w is not None and w.isVisible()]
+                companion.hide_for_capture()
+                for window in visible:
+                    window.hide()
+                try:
+                    await asyncio.sleep(0.05)
+                    return await asyncio.to_thread(capture_all)
+                finally:
+                    companion.restore_after_capture()
+                    for window in visible:
+                        if window is not coaching_window or coaching_runtime.mode == mode:
+                            window.show()
+
+        coaching_runtime = CoachingRuntime(
+            _configured_llm(result.config), result.config.default_model,
+            capture=capture_for_coaching,
+        )
+        coaching_window = CoachingWindow(coaching_runtime)
+        manager.attach_coaching(coaching_runtime)
+        tray_icon.show_tutorial_requested.connect(
+            lambda: coaching_window.open_mode(CoachingMode.TUTORIAL)
+        )
+        tray_icon.show_tutor_requested.connect(
+            lambda: coaching_window.open_mode(CoachingMode.TUTORING)
+        )
+        tray_icon.assistant_requested.connect(coaching_runtime.stop_session)
+        result.app.aboutToQuit.connect(coaching_runtime.interrupt)
 
         # State → companion
         manager.state_changed.connect(companion.set_state)
@@ -270,6 +316,15 @@ def run() -> int:
         if isinstance(tts, KokoroTTSClient):
             loop.create_task(tts.preload())
         loop.run_forever()
+        if coaching_window is not None:
+            loop.run_until_complete(coaching_window.aclose())
+        if coaching_runtime is not None:
+            manager.detach_coaching()
+            loop.run_until_complete(coaching_runtime.aclose())
+            result.app.aboutToQuit.disconnect(coaching_runtime.interrupt)
+            coaching_window.deleteLater()
+            coaching_runtime.deleteLater()
+            result.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         if memory_window is not None:
             memory_window.close()
         if memory_runtime is not None:

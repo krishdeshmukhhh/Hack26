@@ -1,5 +1,39 @@
 # Architecture
 
+## Coaching and tutoring application integration
+
+`coaching_runtime.py` and `ui/coaching_window.py` connect the shared contract,
+URL tutorial coach and live polynomial tutor. `app.py` creates a dedicated model
+client using the existing backend configuration. CompanionManager model changes
+propagate to coaching. No new configuration schema or symbolic dependency is
+needed: the checker uses bounded AST parsing and exact Fraction arithmetic.
+
+The tutorial widget also accepts explicitly selected local TXT/Markdown/HTML/PDF
+documents. `tutorial_coach/files.py` performs bounded extraction on a worker and
+`Coach.prepare_file` reuses source-attributed preview/plan construction. PDF text
+comes from QtPdf with page references; scanned PDFs need a future OCR adapter.
+Opaque upload IDs avoid transmitting absolute local paths. No source scripts,
+linked resources or file instructions are executed; no persistent copies are made.
+
+Tray entries select Tutorial URL coach, Live integral tutor or ordinary assistant.
+The visible mode selector states which session owns push-to-talk. Only the
+manager consumes final transcripts. Ordinary mode preserves memory, screenshot,
+streaming, TTS and POINT behavior. Coaching routes to its service, speaks final
+text and never interprets model control tags as desktop actions. Coaching work
+is excluded from the ordinary conversation buffer and persistent learning.
+
+Mode changes cancel old requests/audio, end legacy walkthroughs and pause active
+tutorial navigation. Stop/Escape/window close restore ordinary mode. Request
+generations reject late output and hints for older tutoring problems. Shutdown
+awaits UI-owned captures and URL tasks, disconnects signals and releases Qt objects
+on the GUI thread before closing the existing memory worker.
+
+Screen sharing requires a feature button. Capture hides the Curio window/overlay
+and uses the existing capture function. Equation recognition requires editable
+confirmation before exact assessment. Tutorial screen comparisons are model
+claims, not verified completion. See coaching-integration.md for the review and
+the feature docs for input limits and unsupported cases.
+
 Curio is a Python + PySide6 system-tray app. It uses `qasync` to run
 asyncio on Qt's event loop, so network I/O never blocks the UI.
 
