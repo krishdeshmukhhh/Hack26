@@ -10,6 +10,7 @@ a = Analysis(
     binaries=pyside6_libs,
     datas=[
         ("config.example.toml", "."),
+        ("curio/assets/pets", "curio/assets/pets"),
         *pyside6_data,
     ],
     hiddenimports=[

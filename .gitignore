@@ -10,3 +10,5 @@ coding-plans/
 *.env.*
 *.env
 !server/curio.env.example
+
+.venv/

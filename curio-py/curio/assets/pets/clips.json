@@ -1,0 +1,56 @@
+{
+  "fox": {
+    "idle": "1:1-5",
+    "walk": "3:1-8",
+    "jump": "4:1-11",
+    "attentive": "2:1-5",
+    "thinking": "1:1-5",
+    "responding": "2:6-9",
+    "speaking": "2:6-9",
+    "reaction": "5:1-5",
+    "sleep": "6:1-6",
+    "settle": "7:1-7",
+    "wake": "7:7-1"
+  },
+  "cat": {
+    "idle": "1:1-4",
+    "walk": "5:1-8",
+    "run": "6:1-8",
+    "jump": "9:1-7",
+    "attentive": "2:1-4",
+    "thinking": "4:1-4",
+    "responding": "2:1-4",
+    "speaking": "3:1-4",
+    "reaction": "8:1-6",
+    "sleep": "7:1-4",
+    "wake": "9:1-7",
+    "alternative": "4:1-4"
+  },
+  "red_panda": {
+    "idle": "1:1-6",
+    "walk": "3:1-8",
+    "jump": "4:1-8",
+    "attentive": "2:1-6",
+    "thinking": "1:1-6",
+    "responding": "2:1-6",
+    "speaking": "2:1-6",
+    "reaction": "5:1-5",
+    "settle": "6:1-8",
+    "sleep": "7:1-8",
+    "wake": "6:8-1"
+  },
+  "ferret": {
+    "idle": "1:1-8",
+    "walk": "3:1-8",
+    "run": "4:1-8",
+    "jump": "6:1-8",
+    "attentive": "2:1-8",
+    "thinking": "1:1-8",
+    "responding": "2:1-8",
+    "speaking": "2:1-8",
+    "reaction": "2:1-8",
+    "sleep": "8:1-8",
+    "settle": "9:1-8",
+    "wake": "9:8-1"
+  }
+}

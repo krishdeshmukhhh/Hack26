@@ -46,3 +46,14 @@ whisper_model = "base.en"
 whisper_device = "cpu"
 # Part of a Windows voice name, for example "Aria" or "Zira". Empty = default.
 tts_voice = ""
+
+# Animated cursor companion. Tray menu > Pet changes species immediately and saves it.
+[pet]
+species = "fox"                 # fox, cat, red-panda, ferret
+profile = "auto"                # auto, playful, reserved, relaxed, energetic
+reduced_motion = false
+playful_idle = true
+jump_frequency = 1.0            # 0 disables jumps; multiplier from 0 to 5
+jump_height = 0.0               # 0-64 logical pixels; only clips allowing added arcs
+jump_speed = 1.0                # playback multiplier, 0.25-4
+sleep_after_seconds = 120       # inactivity threshold, 10-3600 seconds

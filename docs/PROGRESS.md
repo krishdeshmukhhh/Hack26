@@ -101,3 +101,38 @@ the demo app.
 - **Config errors** only show in the log; the app looks normal but does nothing.
 - **Duplicate errors:** an LLM failure is reported twice (the client's signal and the manager's `except`).
 - **Shared GPUs:** our GPUs are shared and can be taken at any time; there's no automatic fallback.
+
+## Animated pets ? 2026-10-24
+
+Implemented on `codex/animated-pet-design` after design/mapping approval.
+
+### Verified milestone: player and behavior
+- Four packaged sheets, explicit mappings and per-frame jump timing.
+- Smooth movement, randomized idle play and traversal hops, cooldowns, data-driven
+  profiles, sleep/wake and reduced motion. No queued jumps or extra vertical arc.
+- Tests cover frame bounds/alpha, one-shot recovery, live destinations, priority,
+  cooldown, profile selection and missing-clip fallback. Slow movement counts as
+  activity and sleeping pets are not awakened by optional idle scheduling.
+
+### Verified milestone: settings and integration
+- Tray > Pet switches species immediately and persists in the existing TOML file,
+  preserving comments and unrelated settings. Existing configs use defaults.
+- Selection preserves streaming/speaking and POINT lifecycle. Point arrival holds
+  800 ms then resumes cursor following independent of TTS.
+- Retained base Windows window behavior, microphone/output waveforms, capture
+  hide/restore and triangle asset fallback. Separate text-streaming and actual
+  playback events drive presentation; cancellation stops pending synthesis.
+- Security warning has a presentation event, not automatic detection.
+- Fixed existing CRLF event parsing in cloud SSE after original tests exposed the
+  issue on this Windows checkout.
+
+### Verification and remaining checks
+- **138 tests pass** with Python 3.13.5/PySide6 6.8.3. Declared support remains
+  Python 3.12, which was unavailable here. Scoped pet/integration Ruff checks pass; repository-wide Ruff still reports
+  22 existing style issues, including two in the minimally patched SSE client.
+- Inspected 24 actual offscreen Qt renders: pet-review/implemented-preview.png.
+- Manual verification remains for desktop click-through/focus, real audio timing,
+  full-speed animation feel, physical multi-monitor/mixed DPI, display hot-unplug
+  and frozen executable startup. No live model-server check was performed.
+- Cat speaking is a grooming fallback; sleep is a resting pose. Jump height is
+  reserved for future external-arc clips and does not affect these four sheets.

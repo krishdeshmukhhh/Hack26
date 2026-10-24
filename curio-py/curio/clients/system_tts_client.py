@@ -82,7 +82,7 @@ class SystemTTSClient(QObject):
             self._playback_future.set_result(finished)
 
     def _on_state_changed(self, state: QTextToSpeech.State) -> None:
-        if state in (QTextToSpeech.State.Speaking, QTextToSpeech.State.Synthesizing):
+        if state == QTextToSpeech.State.Speaking:
             if not self._started:
                 self._started = True
                 self.playback_started.emit()
