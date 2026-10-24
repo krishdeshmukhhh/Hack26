@@ -12,6 +12,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from curio.lab import LabSettings
 from curio.memory_contract import MemorySettings
 from curio.memory_settings import parse_memory_settings
 from curio.pet_config import PetSettings
@@ -110,6 +111,7 @@ class Config:
     local: LocalConfig | None = None
     pet: PetSettings = field(default_factory=PetSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
+    lab: LabSettings = field(default_factory=LabSettings)
 
     @property
     def point_coords(self) -> str:
@@ -181,6 +183,7 @@ class Config:
         try:
             pet = PetSettings.from_dict(data.get("pet", {}))
             memory = parse_memory_settings(data.get("memory", {}))
+            lab = LabSettings.from_dict(data.get("lab", {}))
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
 
@@ -194,6 +197,7 @@ class Config:
             local=local,
             pet=pet,
             memory=memory,
+            lab=lab,
         )
 
     @staticmethod

@@ -20,6 +20,7 @@ from platformdirs import user_config_dir, user_log_dir
 from PySide6.QtWidgets import QApplication
 
 from curio.clients.kokoro_tts_client import KokoroTTSClient
+from curio.clients.lab_client import LabClient
 from curio.clients.llm_client import LLMClient
 from curio.clients.openai_llm_client import OpenAICompatLLMClient
 from curio.clients.system_tts_client import SystemTTSClient
@@ -161,7 +162,23 @@ def run() -> int:
     tts: TTSClient | SystemTTSClient | KokoroTTSClient | None = None
     memory_runtime = None
     memory_window = None
+    lab_client: LabClient | None = None
     if result.config is not None:
+        if result.config.lab.enabled:
+            lab_client = LabClient(result.config.lab)
+            tracker = lab_client.tracker
+            tray_icon.set_lab_enabled(True)
+
+            def refresh_lab_menu() -> None:
+                tray_icon.update_lab(
+                    [(s.index, s.title) for s in tracker.steps], tracker.step, tracker.stuck,
+                    connected=lab_client.connected, error=lab_client.last_error,
+                )
+
+            lab_client.changed.connect(refresh_lab_menu)
+            tray_icon.lab_stuck_toggled.connect(tracker.set_stuck)
+            tray_icon.lab_step_selected.connect(tracker.set_step)
+            refresh_lab_menu()
         memory_runtime = MemoryRuntime(result.config.memory, config_path=result.config_path)
         memory_window = MemoryWindow(
             memory_runtime, settings=memory_runtime.settings,
@@ -198,7 +215,16 @@ def run() -> int:
             screen_capture_fn=capture_all,
             panel_visibility_controller=companion,
             memory=memory_runtime.conversation,
+            lab=lab_client.tracker if lab_client is not None else None,
         )
+        if lab_client is not None:
+            lab_client.hint_received.connect(manager.deliver_hint)
+
+            def show_hint_in_history(text: str) -> None:
+                history.append_delta(text)
+                history.commit_turn(text)
+
+            manager.lab_hint_shown.connect(show_hint_in_history)
 
         # State → companion
         manager.state_changed.connect(companion.set_state)
@@ -269,7 +295,11 @@ def run() -> int:
             loop.create_task(transcription.preload())
         if isinstance(tts, KokoroTTSClient):
             loop.create_task(tts.preload())
+        if lab_client is not None:
+            lab_client.start()
         loop.run_forever()
+        if lab_client is not None:
+            loop.run_until_complete(lab_client.stop())
         if memory_window is not None:
             memory_window.close()
         if memory_runtime is not None:

@@ -34,6 +34,7 @@ dev = [
 
 [project.scripts]
 curio = "curio.__main__:main"
+curio-lab = "curio.lab_server:main"
 
 [tool.ruff]
 line-length = 100

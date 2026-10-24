@@ -71,3 +71,12 @@ storage_mode = "local"           # local or session
 automatic_learning = "off"       # off or propose; approval always required
 # storage_path = "C:/Users/you/AppData/Local/Curio/memory.sqlite3"
 # default_expiration_days = 90
+
+# Classroom lab mode. Your TA runs `curio-lab lab.toml` and gives you the
+# URL and code. Curio then shares only which lab step you're on and whether
+# you seem stuck: never your questions, answers or screen.
+[lab]
+enabled = false
+server_url = ""                  # for example "http://10.0.0.12:8765"
+code = ""                        # the join code the lab server printed
+stuck_after_questions = 3        # questions on one step before the TA sees you as stuck

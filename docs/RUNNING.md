@@ -232,6 +232,35 @@ This host's newest Qt wheel failed with a DLL/procedure error; verification used
 6.8.3. If Qt fails to import, rebuild the environment and check conflicting Qt
 DLLs on PATH. No project interpreter requirement was changed.
 
+## Classroom lab mode
+
+**TA.** Copy `curio-py/lab.example.toml`, write your lab's steps, then from
+`curio-py`:
+
+```powershell
+uv run curio-lab my-lab.toml          # --port 8765 by default
+```
+
+It prints the `[lab]` lines students need and a private dashboard link
+(`http://<your-ip>:8765/?key=...`). Students' laptops must reach that
+address, so use the lab's own network and allow the port through Windows
+Firewall if prompted. Set `code` and `instructor_key` in the lab file to keep
+them the same across restarts.
+
+**Students.** In `%APPDATA%\Curio\config.toml`:
+
+```toml
+[lab]
+enabled = true
+server_url = "http://10.0.0.12:8765"
+code = "PLOT3"
+```
+
+Restart Curio. Tray > Lab shows the connection, the current step, and an
+"I'm stuck (tell the TA)" toggle. When the TA sends a hint, a stuck
+student's pet says "hint from your TA...", flies to the target and shows a
+"TA hint!" pill. Hints wait until any answer in progress has finished.
+
 ## Continuous learning and memories
 
 If pytest reports `PermissionError` for `Temp/pytest-of-<user>` or access-denied

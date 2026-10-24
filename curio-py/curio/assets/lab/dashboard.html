@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curio Lab</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --line: #e3e6eb; --text: #16181d; --muted: #646b78;
+    --blue: #3380ff; --blue-soft: #dbe7ff; --amber: #d97706; --amber-soft: #fdecc8;
+    --error: #c2410c;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111317; --card: #1a1d23; --line: #2a2f38; --text: #e8eaee; --muted: #9098a6;
+      --blue: #5b98ff; --blue-soft: #1e2d4a; --amber: #f5a524; --amber-soft: #3d2c0c;
+      --error: #fb923c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; justify-content: space-between; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0; }
+  .join { text-align: right; }
+  .join .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .join .code { font: 600 30px/1.1 ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: .12em; }
+  .totals { display: flex; gap: 12px; margin: 20px 0; }
+  .total { flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+  .total b { display: block; font-size: 28px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .total span { color: var(--muted); font-size: 13px; }
+  .total.alert b { color: var(--amber); }
+  .privacy { color: var(--muted); font-size: 13px; margin: -8px 0 20px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 8px; }
+  .row { padding: 14px 16px; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; }
+  .row.hot { background: linear-gradient(90deg, var(--amber-soft), transparent 70%); }
+  .row-main { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 4px 12px; align-items: center; }
+  .num { font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .title { min-width: 0; }
+  .status { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .status.stuck { color: var(--amber); }
+  .status.quiet { color: var(--muted); font-weight: 400; }
+  .bar { grid-column: 2 / 4; display: flex; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; transition: width .4s; }
+  .bar .w { background: var(--blue); }
+  .bar .s { background: var(--amber); }
+  button {
+    font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--card);
+    color: var(--text); padding: 5px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--blue); }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .actions { grid-column: 2 / 4; display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  form { grid-column: 2 / 4; display: grid; gap: 8px; margin-top: 10px; }
+  label { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  textarea, input, select {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 9px; width: 100%;
+  }
+  textarea { resize: vertical; min-height: 64px; }
+  .form-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+  .form-foot select { width: auto; }
+  .note { font-size: 13px; color: var(--muted); }
+  .note.error { color: var(--error); }
+  .hint { padding: 12px 16px; border-top: 1px solid var(--line); }
+  .hint:first-child { border-top: 0; }
+  .hint q { display: block; }
+  .hint .meta { color: var(--muted); font-size: 13px; }
+  .empty { padding: 16px; color: var(--muted); }
+  .banner { padding: 12px 16px; border-radius: 10px; background: var(--amber-soft); margin-bottom: 16px; display: none; }
+  @media (max-width: 560px) {
+    .join { text-align: left; }
+    .totals { flex-wrap: wrap; }
+    .total { min-width: 40%; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="banner" id="banner"></div>
+  <header>
+    <div>
+      <h1 id="lab-name">Curio Lab</h1>
+      <p class="sub">Every student's Curio handles the routine questions. This page shows who needs you.</p>
+    </div>
+    <div class="join">
+      <div class="label">Join code</div>
+      <div class="code" id="code">&mdash;</div>
+    </div>
+  </header>
+
+  <div class="totals">
+    <div class="total"><b id="students">0</b><span>students connected</span></div>
+    <div class="total" id="stuck-total"><b id="stuck">0</b><span>stuck right now</span></div>
+  </div>
+  <p class="privacy">Counts only. Students' questions and screens stay on their own computers.</p>
+
+  <h2>Steps</h2>
+  <section id="rows"><div class="empty">Waiting for the first student to connect&hellip;</div></section>
+
+  <h2>Hints sent</h2>
+  <section id="hints"><div class="empty">No hints yet.</div></section>
+</main>
+
+<script>
+"use strict";
+const key = new URLSearchParams(location.search).get("key") || "";
+const rowsEl = document.getElementById("rows");
+const hintsEl = document.getElementById("hints");
+const banner = document.getElementById("banner");
+const rowEls = new Map();
+let openForm = null;
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(attrs)) {
+    if (name === "class") node.className = value;
+    else if (name.startsWith("on")) node.addEventListener(name.slice(2), value);
+    else node.setAttribute(name, value);
+  }
+  node.append(...children);
+  return node;
+}
+
+function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
+
+function ago(seconds) {
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+}
+
+function showBanner(text) {
+  banner.textContent = text;
+  banner.style.display = text ? "block" : "none";
+}
+
+function hintForm(row) {
+  const note = el("span", { class: "note" });
+  const text = el("textarea", { name: "text", maxlength: "500", required: "",
+    placeholder: "e.g. Save the script before pressing Run, or MATLAB runs the old version." });
+  const target = el("input", { name: "target", maxlength: "120",
+    placeholder: "e.g. the Run button in the Editor tab (optional)" });
+  const audience = el("select", { name: "audience" },
+    el("option", { value: "stuck" }, "Only students stuck here"),
+    el("option", { value: "step" }, "Everyone on this step"));
+  const send = el("button", { class: "primary", type: "submit" }, "Send hint");
+  const form = el("form", {
+    onsubmit: async (event) => {
+      event.preventDefault();
+      send.disabled = true;
+      note.className = "note";
+      note.textContent = "Sending…";
+      try {
+        const result = await api("/api/hints", {
+          step: row.index, text: text.value, target: target.value, audience: audience.value,
+        });
+        note.textContent = result.recipients
+          ? `Sent to ${plural(result.recipients, "student")}. Their pets will point at it.`
+          : "Sent, but no one matched right now.";
+        text.value = ""; target.value = "";
+        refresh();
+      } catch (error) {
+        note.className = "note error";
+        note.textContent = error.message;
+      } finally {
+        send.disabled = false;
+      }
+    },
+  },
+    el("label", {}, "Hint (Curio reads it aloud)", text),
+    el("label", {}, "What should the pets point at?", target),
+    el("div", { class: "form-foot" }, audience, el("span", {}, note, " ", send)));
+  return form;
+}
+
+function buildRow(row) {
+  const status = el("span", { class: "status" });
+  const working = el("i", { class: "w" });
+  const stuck = el("i", { class: "s" });
+  const toggle = el("button", { type: "button" }, "Send a hint");
+  const node = el("div", { class: "row" },
+    el("div", { class: "row-main" },
+      el("span", { class: "num" }, row.index ? String(row.index) : "?"),
+      el("span", { class: "title" }, row.title),
+      status,
+      el("div", { class: "bar" }, working, stuck),
+      row.index ? el("div", { class: "actions" }, toggle) : ""));
+  toggle.addEventListener("click", () => {
+    const main = node.querySelector(".row-main");
+    const existing = main.querySelector("form");
+    if (existing) { existing.remove(); openForm = null; return; }
+    const form = hintForm(row);
+    main.append(form);
+    openForm = row.index;
+    form.querySelector("textarea").focus();
+  });
+  return { node, status, working, stuck };
+}
+
+function render(data) {
+  document.getElementById("lab-name").textContent = data.name;
+  document.title = `${data.name} · Curio Lab`;
+  document.getElementById("code").textContent = data.code;
+  document.getElementById("students").textContent = data.students;
+  document.getElementById("stuck").textContent = data.stuck;
+  document.getElementById("stuck-total").classList.toggle("alert", data.stuck > 0);
+
+  // Show every step, plus the "not known yet" bucket when anyone is in it.
+  const rows = data.steps.map((s) => data.rows.find((r) => r.index === s.index)
+    || { index: s.index, title: s.title, working: 0, stuck: 0 });
+  const unknown = data.rows.find((r) => r.index === 0);
+  if (unknown) rows.unshift(unknown);
+  const max = Math.max(1, ...rows.map((r) => r.working + r.stuck));
+
+  if (rowsEl.querySelector(".empty")) rowsEl.textContent = "";
+  for (const row of rows) {
+    let view = rowEls.get(row.index);
+    if (!view) {
+      view = buildRow(row);
+      rowEls.set(row.index, view);
+    }
+    view.status.className = "status" + (row.stuck ? " stuck" : row.working ? "" : " quiet");
+    view.status.textContent = row.stuck
+      ? `${plural(row.stuck, "student")} stuck`
+      : row.working ? `${row.working} working` : "nobody here";
+    view.working.style.width = `${(row.working / max) * 100}%`;
+    view.stuck.style.width = `${(row.stuck / max) * 100}%`;
+    view.node.classList.toggle("hot", row.stuck > 0);
+  }
+  // Keep step order; the "?" bucket goes first and disappears when empty.
+  const wanted = rows.map((r) => rowEls.get(r.index).node);
+  for (const [index, view] of rowEls) {
+    if (!rows.some((r) => r.index === index) && openForm !== index) {
+      view.node.remove();
+      rowEls.delete(index);
+    }
+  }
+  wanted.forEach((node, i) => { if (rowsEl.children[i] !== node) rowsEl.insertBefore(node, rowsEl.children[i] || null); });
+
+  hintsEl.textContent = "";
+  if (!data.hints.length) hintsEl.append(el("div", { class: "empty" }, "No hints yet."));
+  for (const hint of data.hints) {
+    const who = hint.audience === "step" ? "on the step" : "stuck";
+    hintsEl.append(el("div", { class: "hint" },
+      el("q", {}, hint.text),
+      el("div", { class: "meta" },
+        `Step ${hint.step}`, hint.target ? ` · points at ${hint.target}` : "",
+        ` · reached ${hint.delivered} of ${hint.recipients} ${who}`,
+        ` · ${ago(hint.age_seconds)}`)));
+  }
+}
+
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { "X-Lab-Key": key, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Server said ${response.status}`);
+  return data;
+}
+
+async function refresh() {
+  try {
+    render(await api("/api/dashboard"));
+    showBanner("");
+  } catch (error) {
+    showBanner(key
+      ? `Can't reach the lab server: ${error.message}`
+      : "Open the dashboard link the lab server printed. It ends in ?key=…");
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

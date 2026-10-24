@@ -252,17 +252,24 @@ class CompanionWidget(QWidget):
     # ------------------------------------------------------------------
 
     def fly_to(
-        self, x: int, y: int, *, hold: bool = False, step: tuple[int, int] | None = None
+        self,
+        x: int,
+        y: int,
+        *,
+        hold: bool = False,
+        step: tuple[int, int] | None = None,
+        caption: str | None = None,
     ) -> None:
         """Fly to screen point (x, y) and point at it.
 
         ``hold`` keeps the buddy there (walkthrough step) until
-        ``release_hold``; ``step`` adds "(k/n)" to the pointer phrase.
+        ``release_hold``; ``step`` adds "(k/n)" to the pointer phrase;
+        ``caption`` replaces the random phrase (a TA hint, for example).
         """
         self._point_timer.stop()
         self.bubble.hide_now()
         self._hold = hold
-        self._caption = step_caption(random_pointer_phrase(), step)
+        self._caption = step_caption(caption or random_pointer_phrase(), step)
 
         dest = landing_point((x, y), _screen_rect(QPointF(x, y)))
         self._mode = _Mode.FLYING

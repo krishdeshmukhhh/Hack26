@@ -1,0 +1,33 @@
+# A Curio classroom lab. Run it with:
+#   uv run curio-lab lab.example.toml
+# The server prints the join code for students and a private dashboard link
+# for you. Students' Curios see these step titles, so they can tell which
+# step a student is on from the student's screen.
+
+name = "ENGR 1181 Lab 3: Plotting in MATLAB"
+
+# Optional. Without them, a random join code and dashboard key are made
+# each time the server starts.
+# code = "PLOT3"
+# instructor_key = "change-me"
+
+[[steps]]
+title = "Open MATLAB and create a new script named lab3.m"
+
+[[steps]]
+title = "Load lab3_data.csv into a table with readtable"
+
+[[steps]]
+title = "Make vectors t and v from the table's time and velocity columns"
+
+[[steps]]
+title = "Plot v against t with plot(t, v)"
+
+[[steps]]
+title = "Add a title, axis labels with units, and a grid"
+
+[[steps]]
+title = "Save the figure as lab3_plot.png with exportgraphics"
+
+[[steps]]
+title = "Run the whole script and submit lab3.m and lab3_plot.png"

@@ -116,9 +116,9 @@ class PetCompanionWidget(CompanionWidget):
         super().flash_error(message)
         self.controller.react("error")
 
-    def fly_to(self, x: int, y: int, *, hold: bool = False, step=None):
+    def fly_to(self, x: int, y: int, *, hold: bool = False, step=None, caption=None):
         if self.catalog is None:
-            return super().fly_to(x, y, hold=hold, step=step)
+            return super().fly_to(x, y, hold=hold, step=step, caption=caption)
         screen = QApplication.screenAt(QPoint(x, y))
         if screen is None:
             return
@@ -130,7 +130,7 @@ class PetCompanionWidget(CompanionWidget):
         self.controller.point_to(self._point_target)
         # macOS-style pointer pill beside the target. It fades when the pet's
         # visit ends; walkthrough steps keep both until released.
-        caption = step_caption(random_pointer_phrase(), step)
+        caption = step_caption(caption or random_pointer_phrase(), step)
         # The sprite covers the target area, so put the pill just right of it.
         self._pill_anchor = QPointF(self._point_target[0] + self.PET_SIZE + 4, y)
         self._pill_visit = True

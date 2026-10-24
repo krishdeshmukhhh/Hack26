@@ -39,6 +39,7 @@ signals and methods in both backends.
 | `ui/pet_widget.py` | Animated pet presentation (sprite instead of triangle) and monitor placement. Subclasses `CompanionWidget`. |
 | `pets.py`, `pet_motion.py`, `pet_config.py` | Sprite timing, accelerated pursuit, behavior profiles and persisted pet preferences. |
 | `ui/history_window.py`, `ui/tray_icon.py` | Transcript window and tray menu. |
+| `lab.py`, `clients/lab_client.py`, `lab_server.py` | Classroom lab mode: the student's step/stuck tracker, its check-ins, and the TA's server and dashboard. |
 
 ### Backends (`backend` in config.toml)
 
@@ -94,6 +95,31 @@ matches "how do I…" phrasings, and also task requests whose "how" Whisper
 dropped ("do I enable light mode…", "I want to export…"). The
 reminder goes into that request only, not into the stored history. In live
 tests this took first-step tagging from 1 in 3 runs to 4 in 4.
+
+## Classroom lab mode
+
+A TA runs `curio-lab lab.toml` (standard library only) on the lab network.
+Each student's Curio, with `[lab]` enabled, checks in every 3 s with only a
+random per-launch id, a step number and a stuck flag. The dashboard at
+`/?key=...` shows counts per step, so the TA sees "8 students stuck on step
+4" and never names, questions or screens.
+
+- **Step.** The lab's step titles go into the system prompt, and the model
+  tags answers with `[LAB:k]` (stripped like STEP and POINT). The tray's
+  Lab > I'm on step overrides it.
+- **Stuck.** Set by `stuck_after_questions` questions (default 3) on one
+  step, by asking for a person ("i'm stuck", "get the TA"), or by the tray.
+  Moving to another step clears it. Walkthrough continuations don't count.
+- **Hints.** A hint goes to the students stuck on its step when it's sent
+  (or everyone on the step). On the next check-in, `CompanionManager.deliver_hint`
+  waits until the student is IDLE, takes a fresh screenshot, asks the
+  student's own model for only a POINT tag for the hint's target, flies there
+  with a "TA hint!" pill and speaks the TA's words. If locating fails it still
+  speaks. A hint for a step the student has left is dropped.
+
+The screenshot for a hint goes to the student's own backend, like any
+question; the lab server never receives screen data. Traffic is plain HTTP:
+the join code and instructor key stop strangers posting, not listening.
 
 ## Voice
 

@@ -11,6 +11,7 @@ a = Analysis(
     datas=[
         ("config.example.toml", "."),
         ("curio/assets/pets", "curio/assets/pets"),
+        ("curio/assets/lab", "curio/assets/lab"),
         *pyside6_data,
     ],
     hiddenimports=[

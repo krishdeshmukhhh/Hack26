@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
@@ -34,6 +35,13 @@ from curio.config import Config
 from curio.conversation_history import ConversationHistory
 from curio.hotkey import HotkeyMonitor
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
+from curio.lab import (
+    LabHint,
+    LabTracker,
+    hint_point_request,
+    hint_spoken_text,
+    parse_lab_tag,
+)
 from curio.memory_conversation import ConversationMemory
 from curio.mic_capture import MicCapture
 from curio.point_mapper import map_point_to_screen
@@ -63,12 +71,19 @@ class CaptureVisibilityController(Protocol):
         ...
 
     def fly_to(
-        self, x: int, y: int, *, hold: bool = False, step: tuple[int, int] | None = None
+        self,
+        x: int,
+        y: int,
+        *,
+        hold: bool = False,
+        step: tuple[int, int] | None = None,
+        caption: str | None = None,
     ) -> None:
         """Fly the companion to a screen point and point at it.
 
         ``hold`` keeps it there (walkthrough step waiting for a click);
-        ``step`` is (index, total) for the pointer pill.
+        ``step`` is (index, total) for the pointer pill; ``caption``
+        replaces the pill's random phrase.
         """
         ...
 
@@ -96,6 +111,8 @@ class CompanionManager(QObject):
     walkthrough_ended = Signal()
     speaking_changed = Signal(bool)
     security_warning = Signal(str)
+    # Lab mode: a TA hint is being spoken (its spoken text).
+    lab_hint_shown = Signal(str)
 
     def __init__(
         self,
@@ -111,10 +128,16 @@ class CompanionManager(QObject):
         parent: QObject | None = None,
         *,
         memory: ConversationMemory | None = None,
+        lab: LabTracker | None = None,
     ) -> None:
         super().__init__(parent)
 
         self._memory = memory
+        # Classroom lab mode: step/stuck tracking and TA hints.
+        self._lab = lab
+        self._pending_hint: LabHint | None = None
+        # True while the model locates a hint's target: its reply is only a tag.
+        self._locating_hint = False
         self._config = config
         self._mic = mic
         self._hotkey = hotkey
@@ -222,6 +245,11 @@ class CompanionManager(QObject):
     def _set_state(self, new_state: VoiceState) -> None:
         self._state = new_state
         self.state_changed.emit(new_state)
+        if new_state == VoiceState.IDLE and self._pending_hint is not None:
+            # Deliver after the current call stack, which may still be
+            # finishing the turn that just ended.
+            with contextlib.suppress(RuntimeError):  # no loop: nothing to deliver on
+                asyncio.get_running_loop().call_soon(self._deliver_pending_hint)
 
     # ------------------------------------------------------------------
     # Hotkey handlers
@@ -310,7 +338,7 @@ class CompanionManager(QObject):
             task = None
         if task is not None and task is not self._current_task:
             return
-        if not self._cancel_flag:
+        if not self._cancel_flag and not self._locating_hint:
             self.response_delta.emit(text)
 
     # ------------------------------------------------------------------
@@ -411,6 +439,83 @@ class CompanionManager(QObject):
             self._end_walkthrough()
 
     # ------------------------------------------------------------------
+    # Classroom lab mode
+    # ------------------------------------------------------------------
+
+    def deliver_hint(self, hint: LabHint) -> None:
+        """A TA hint arrived: point at it now if idle, otherwise after this turn."""
+        if self._lab is not None and not self._lab.wants_hint(hint):
+            logger.info("lab: dropping hint %d, the student moved on", hint.id)
+            return
+        self._pending_hint = hint
+        self._deliver_pending_hint()
+
+    def _deliver_pending_hint(self) -> None:
+        # Never interrupt: a turn or walkthrough (GUIDING) ends in IDLE first.
+        hint = self._pending_hint
+        if hint is None or self._state != VoiceState.IDLE:
+            return
+        self._pending_hint = None
+        self._generation += 1
+        self._cancel_flag = False
+        self._set_state(VoiceState.PROCESSING)
+        self._current_task = asyncio.ensure_future(self._run_hint(hint, self._generation))
+
+    async def _run_hint(self, hint: LabHint, generation: int) -> None:
+        """Find the hint's target on this student's screen, point, and say the hint.
+
+        The screenshot goes only to this student's own model, as with any
+        question. If locating fails, the hint is still spoken.
+        """
+        spoken_text = hint_spoken_text(hint)
+        coords = None
+        try:
+            await asyncio.sleep(0)
+            self._panel_visibility_controller.hide_for_capture()
+            await asyncio.sleep(0.05)
+            try:
+                screenshots = await asyncio.to_thread(self._screen_capture_fn)
+                self._current_screenshots = screenshots
+            finally:
+                self._panel_visibility_controller.restore_after_capture()
+            if generation != self._generation:
+                return
+            content = [
+                *_image_blocks(screenshots),
+                {"type": "text", "text": hint_point_request(hint)},
+            ]
+            self._locating_hint = True
+            try:
+                reply = await self._llm.send(
+                    [{"role": "user", "content": content}],
+                    system=build_system_prompt(point_coords=self._config.point_coords),
+                    model=self._current_model,
+                )
+            finally:
+                self._locating_hint = False
+            without_tags, _ = parse_step_tag(parse_lab_tag(reply)[0])
+            _, point_tag = parse_point_tag(without_tags)
+            if point_tag is not None:
+                coords = map_point_to_screen(point_tag, screenshots, self._config.point_coords)
+        except asyncio.CancelledError:
+            if generation == self._generation:
+                self._set_state(VoiceState.IDLE)
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("lab: couldn't locate hint %d on screen: %s", hint.id, exc)
+
+        if generation != self._generation or self._cancel_flag:
+            return
+        # Kept in history so "what did the TA mean?" has context.
+        self._history.append(f"(my lab TA sent a hint for step {hint.step})", spoken_text)
+        self._set_state(VoiceState.RESPONDING)
+        self.lab_hint_shown.emit(spoken_text)
+        if coords is not None:
+            self._panel_visibility_controller.fly_to(coords[0], coords[1], caption="TA hint!")
+            logger.info("lab: hint %d points at (%d, %d)", hint.id, coords[0], coords[1])
+        self._speak_task = asyncio.ensure_future(self._speak(spoken_text, generation))
+
+    # ------------------------------------------------------------------
     # TTS playback (async, fire-and-forget)
     # ------------------------------------------------------------------
 
@@ -496,21 +601,7 @@ class CompanionManager(QObject):
                 finally:
                     self._panel_visibility_controller.restore_after_capture()
 
-                # Build image content blocks.
-                image_blocks: list[dict[str, Any]] = []
-                for screenshot in screenshots:
-                    b64 = base64.b64encode(screenshot.jpeg_bytes).decode("ascii")
-                    image_blocks.append({"type": "text", "text": screenshot.label})
-                    image_blocks.append(
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": b64,
-                            },
-                        }
-                    )
+                image_blocks = _image_blocks(screenshots)
 
                 # Build messages from conversation history. Walkthrough reminders
                 # go only into this request, not into the stored history.
@@ -545,6 +636,9 @@ class CompanionManager(QObject):
                 system_prompt = build_system_prompt(
                     kb_content, app_name, point_coords=self._config.point_coords
                 )
+                lab_context = self._lab.prompt_context() if self._lab is not None else None
+                if lab_context:
+                    system_prompt = f"{system_prompt}\n{lab_context}"
 
                 if generation != self._generation:
                     return
@@ -568,8 +662,13 @@ class CompanionManager(QObject):
                     # Recall payloads are data: never parse their POINT/STEP tags.
                     spoken_text, point_tag, step = full_text, None, None
                 else:
-                    without_step, step = parse_step_tag(full_text)
+                    without_lab, lab_step = parse_lab_tag(full_text)
+                    without_step, step = parse_step_tag(without_lab)
                     spoken_text, point_tag = parse_point_tag(without_step)
+                    if self._lab is not None:
+                        self._lab.record_turn(
+                            text, lab_step, is_question=continuing_step is None
+                        )
                 # Store the answer without tags, like the macOS app, so old
                 # coordinates don't confuse later turns.
                 self._history.append(text, spoken_text)
@@ -613,3 +712,18 @@ class CompanionManager(QObject):
 
         # On success, stay in RESPONDING so the response text remains
         # visible until the next hotkey press resets to LISTENING.
+
+
+def _image_blocks(screenshots: list[ScreenshotImage]) -> list[dict[str, Any]]:
+    """Each screenshot as a label text block followed by its JPEG image block."""
+    blocks: list[dict[str, Any]] = []
+    for screenshot in screenshots:
+        b64 = base64.b64encode(screenshot.jpeg_bytes).decode("ascii")
+        blocks.append({"type": "text", "text": screenshot.label})
+        blocks.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+            }
+        )
+    return blocks

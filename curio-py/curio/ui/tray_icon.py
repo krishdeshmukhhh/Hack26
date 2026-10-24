@@ -29,6 +29,9 @@ class TrayIcon(QSystemTrayIcon):
     # like the macOS menu bar toggle. Persisted across launches.
     show_cursor_toggled = Signal(bool)
     pet_selected = Signal(str)
+    # Lab mode: the student says they're stuck (or not), or picks their step.
+    lab_stuck_toggled = Signal(bool)
+    lab_step_selected = Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -73,6 +76,24 @@ class TrayIcon(QSystemTrayIcon):
         )
         self.set_selected_pet("fox")
 
+        # Lab mode menu; hidden unless [lab] is enabled.
+        self._lab_menu = menu.addMenu("Lab")
+        self._lab_status = QAction("Connecting to the lab...", self)
+        self._lab_status.setEnabled(False)
+        self._lab_menu.addAction(self._lab_status)
+        self._lab_stuck = QAction("I'm stuck (tell the TA)", self)
+        self._lab_stuck.setCheckable(True)
+        self._lab_stuck.triggered.connect(self.lab_stuck_toggled.emit)
+        self._lab_menu.addAction(self._lab_stuck)
+        self._lab_steps_menu = self._lab_menu.addMenu("I'm on step")
+        self._lab_step_group = QActionGroup(self)
+        self._lab_step_group.setExclusive(True)
+        self._lab_step_group.triggered.connect(
+            lambda action: self.lab_step_selected.emit(action.data())
+        )
+        self._lab_step_titles: tuple[str, ...] = ()
+        self._lab_menu.menuAction().setVisible(False)
+
         menu.addSeparator()
 
         quit_action = QAction("Quit", menu)
@@ -93,6 +114,43 @@ class TrayIcon(QSystemTrayIcon):
         """Synchronize the menu after loading or persisting a selection."""
         if species in self._pet_actions:
             self._pet_actions[species].setChecked(True)
+
+    def set_lab_enabled(self, enabled: bool) -> None:
+        self._lab_menu.menuAction().setVisible(enabled)
+
+    def update_lab(
+        self,
+        steps: list[tuple[int, str]],
+        step: int,
+        stuck: bool,
+        *,
+        connected: bool,
+        error: str = "",
+    ) -> None:
+        """Refresh the Lab menu from the student's lab state."""
+        if not connected:
+            status = f"Lab: not connected ({error})" if error else "Lab: connecting..."
+            self._lab_status.setText(status)
+        elif stuck:
+            self._lab_status.setText(f"Lab: step {step or '?'} - your TA can see you're stuck")
+        else:
+            self._lab_status.setText(f"Lab: step {step}" if step else "Lab: connected")
+        self._lab_stuck.setChecked(stuck)
+        titles = tuple(f"{index}. {title}" for index, title in steps)
+        if titles != self._lab_step_titles:
+            self._lab_step_titles = titles
+            self._lab_steps_menu.clear()
+            for action in self._lab_step_group.actions():
+                self._lab_step_group.removeAction(action)
+            for (index, _), text in zip(steps, titles, strict=True):
+                action = QAction(text, self)
+                action.setCheckable(True)
+                action.setData(index)
+                self._lab_step_group.addAction(action)
+                self._lab_steps_menu.addAction(action)
+        self._lab_steps_menu.setEnabled(bool(steps))
+        for action in self._lab_step_group.actions():
+            action.setChecked(action.data() == step)
 
     def _on_quit(self) -> None:
         app = QApplication.instance()

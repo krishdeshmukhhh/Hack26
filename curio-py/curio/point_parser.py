@@ -52,8 +52,8 @@ class StepTag:
 _STEP_RE = re.compile(r"\s*\[STEP:\s*(\d+)\s*/\s*(\d+)\s*\]")
 # Any complete control tag, or an unfinished one at the very end of a
 # still-streaming response (e.g. "... [POI").
-_ANY_TAG_RE = re.compile(r"\s*\[(?:POINT|STEP):[^\]]*\]")
-_PARTIAL_TAG_RE = re.compile(r"\s*\[(?:[A-Z]{0,5}|(?:POINT|STEP):[^\]]*)$")
+_ANY_TAG_RE = re.compile(r"\s*\[(?:POINT|STEP|LAB):[^\]]*\]")
+_PARTIAL_TAG_RE = re.compile(r"\s*\[(?:[A-Z]{0,5}|(?:POINT|STEP|LAB):[^\]]*)$")
 
 
 def parse_step_tag(response: str) -> tuple[str, StepTag | None]:
