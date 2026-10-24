@@ -6,6 +6,13 @@ Curio is a Windows desktop assistant for voice questions and on-screen guidance.
 
 Built for Windows developers, creatives, and anyone learning unfamiliar software by doing instead of watching tutorials.
 
+> **HackOhio 2026 team: start here.** This fork runs fully locally, with no API keys:
+> a vision model on the lab GPU server, plus Whisper and voice on your laptop.
+> - **[docs/RUNNING.md](docs/RUNNING.md):** how to start everything and use it
+> - **[docs/PROGRESS.md](docs/PROGRESS.md):** what's been done, decisions, known issues, next steps
+> - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md):** how the code fits together
+> - **[server/README.md](server/README.md):** setting up the model server on a lab workstation
+
 ## How it works
 
 1. Launch Curio. A small blue triangle appears near your cursor.
@@ -112,7 +119,7 @@ Set `backend = "local"` in `config.toml` to skip the Worker entirely:
 - **Speech-to-text:** faster-whisper on your PC (`uv sync --extra local`)
 - **Voice:** the built-in Windows voices
 
-See [`server/README.md`](server/README.md) for running the model on a remote GPU cluster over SSH, and `config.example.toml` for every `[local]` option.
+See [`docs/RUNNING.md`](docs/RUNNING.md) for the full walkthrough, [`server/README.md`](server/README.md) for setting up the model server on a lab GPU workstation, and `config.example.toml` for every `[local]` option.
 
 ## Knowledge base
 
@@ -163,11 +170,12 @@ curio-py/               # Python source
     ui/companion_widget.py    # Cursor-following overlay
     clients/                  # LLM, transcription, TTS clients
     knowledge_base.py         # Per-app KB with window title matching
-  tests/                    # 73 tests
+  tests/                    # unit tests (uv run pytest)
   curio.spec               # PyInstaller build spec
 worker/                   # Cloudflare Worker proxy
   src/index.ts              # Routes: /chat, /tts, /transcribe-token
-docs/                     # PRDs and implementation plans
+server/                   # vLLM launch scripts for the lab GPU workstations
+docs/                     # running guide, architecture, progress log
 ```
 
 **State flow:** IDLE → LISTENING (Ctrl+Alt held) → PROCESSING (screenshots + Claude) → RESPONDING (TTS + cursor guidance) → IDLE
