@@ -148,6 +148,7 @@ def _ask(manager: CompanionManager, text: str) -> None:
 TWO_STEPS = [
     "click new in the toolbar. [POINT:40,120:new button] [STEP:1/2]",
     "now pick folder. [POINT:70,190:folder] [STEP:2/2]",
+    "that's it, your new folder is ready. [POINT:none]",
 ]
 
 
@@ -166,14 +167,20 @@ def test_two_step_walkthrough(qt_app, monkeypatch) -> None:
         assert manager._state == VoiceState.PROCESSING
         assert not parts["clicks"].active
         await _settle(manager)
+        # Even on the model's "last" step, wait for the click and ask again:
+        # its step totals are unreliable, so only a tagless answer ends it.
+        assert parts["annotations"][-1] == ("folder", 2, 2)
+        assert manager._state == VoiceState.GUIDING
+        assert parts["clicks"].active
+
+        parts["clicks"].clicked.emit()  # user did step 2
+        await _settle(manager)
 
     asyncio.run(run())
-    assert parts["annotations"][-1] == ("folder", 2, 2)
-    assert parts["tts"].spoken[-1] == "now pick folder."
-    # Step 1 holds at its target until the click; the final step doesn't.
+    assert parts["tts"].spoken[-1] == "that's it, your new folder is ready."
     flights = parts["overlays"].flights
-    assert [(hold, step) for _, _, hold, step in flights] == [(True, (1, 2)), (False, (2, 2))]
-    # Final step: no more waiting.
+    assert [(hold, step) for _, _, hold, step in flights] == [(True, (1, 2)), (True, (2, 2))]
+    # Tagless answer: walkthrough over.
     assert manager._state == VoiceState.IDLE
     assert not parts["clicks"].active
     # The follow-up request carried a fresh screenshot and the continuation text.
@@ -240,3 +247,26 @@ def test_history_stores_answers_without_tags(qt_app, monkeypatch) -> None:
     assert manager._history._turns[-1] == ("where is save", "the save button is up top.")
     # Spinner (PROCESSING) until there's an answer, then RESPONDING, then IDLE.
     assert parts["states"][-3:] == [VoiceState.PROCESSING, VoiceState.RESPONDING, VoiceState.IDLE]
+
+
+def test_underestimated_step_total_still_continues(qt_app, monkeypatch) -> None:
+    # Live testing: the 30B model often tags multi-click tasks [STEP:1/1].
+    manager, parts = _manager([
+        "right-click the desktop and pick personalize. [POINT:450,450:desktop] [STEP:1/1]",
+        "now click background on the left. [POINT:100,300:background] [STEP:2/2]",
+        "pick a picture and you're done. [POINT:none]",
+    ], monkeypatch)
+
+    async def run() -> None:
+        _ask(manager, "how do i change my wallpaper")
+        await _settle(manager)
+        assert manager._state == VoiceState.GUIDING
+        parts["clicks"].clicked.emit()
+        await _settle(manager)
+        assert manager._state == VoiceState.GUIDING
+        parts["clicks"].clicked.emit()
+        await _settle(manager)
+
+    asyncio.run(run())
+    assert len(parts["llm"].requests) == 3
+    assert manager._state == VoiceState.IDLE

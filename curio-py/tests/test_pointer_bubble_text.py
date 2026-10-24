@@ -16,3 +16,13 @@ def test_friendly_error_messages() -> None:
     assert "config" in friendly_error("config problem: hotkey must be one of ...")
     assert friendly_error("short problem") == "short problem"
     assert len(friendly_error("x" * 500)) == 58
+
+
+def test_step_caption_hides_reached_totals() -> None:
+    from curio.ui.pointer_bubble import step_caption
+
+    assert step_caption("click this!", None) == "click this!"
+    assert step_caption("click this!", (1, 3)) == "click this! (1/3)"
+    # The model said 1/1 or 2/2 but the walkthrough may continue.
+    assert step_caption("click this!", (1, 1)) == "click this! (step 1)"
+    assert step_caption("click this!", (4, 3)) == "click this! (step 4)"

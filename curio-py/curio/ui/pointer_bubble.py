@@ -41,6 +41,18 @@ def random_pointer_phrase() -> str:
     return random.choice(POINTER_PHRASES)
 
 
+def step_caption(phrase: str, step: tuple[int, int] | None) -> str:
+    """Pointer phrase with walkthrough progress: "click this! (2/4)".
+
+    The model's step totals are often too low, so show "step k" instead of
+    a total that's already been reached.
+    """
+    if step is None:
+        return phrase
+    index, total = step
+    return f"{phrase} ({index}/{total})" if total > index else f"{phrase} (step {index})"
+
+
 def friendly_error(message: str) -> str:
     """Short, actionable wording for errors shown in the pill."""
     lowered = message.lower()

@@ -202,7 +202,7 @@ def run() -> int:
 
         # LLM response → log
         manager.response_complete.connect(
-            lambda text: logger.info("response complete: %s", text[:120])
+            lambda text: logger.info("response complete: %s", text[:400])
         )
 
         # Errors → log + companion

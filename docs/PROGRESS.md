@@ -144,7 +144,8 @@ In priority order:
 - **Duplicate errors:** an LLM failure is reported twice (the client's signal and the manager's `except`).
 - **Shared GPUs:** our GPUs are shared and can be taken at any time; there's no automatic fallback.
 - **Walkthrough clicks:** any left click counts as "step done", including a click somewhere unrelated.
-- **Step counts:** the model sometimes underestimates the number of steps. When it says `[STEP:1/1]` for a multi-click task, the walkthrough ends early; asking "what's next?" continues it.
+- **Step counts:** the model's step totals are unreliable (it often says `[STEP:1/1]` for multi-click tasks). Fixed by ignoring the total for control flow: a walkthrough continues after each click until an answer has no STEP tag. The cost is one extra "you're done" turn at the end.
+- **Mishearing:** Whisper `base.en` sometimes garbles words ("wallpaper in Windows" → "wallpaper in the model"). Running Whisper on the GPU would allow a more accurate model.
 - **Model quality:** the 30B model is sometimes sloppy about where things are (it called the centred Windows 11 Start button "bottom left"). Qwen3-VL-32B would be the upgrade when a full GPU is free.
 
 ## Animated pets - 2026-10-24

@@ -22,7 +22,12 @@ from curio.pets import BehaviorController, Clip, SpriteCatalog, SpritePlayer
 from curio.state import VoiceState
 from curio.ui.companion_position import compute_position
 from curio.ui.companion_widget import CompanionWidget
-from curio.ui.pointer_bubble import CURSOR_BLUE, ERROR_RED, random_pointer_phrase
+from curio.ui.pointer_bubble import (
+    CURSOR_BLUE,
+    ERROR_RED,
+    random_pointer_phrase,
+    step_caption,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +130,7 @@ class PetCompanionWidget(CompanionWidget):
         self.controller.point_to(self._point_target)
         # macOS-style pointer pill beside the target. It fades when the pet's
         # visit ends; walkthrough steps keep both until released.
-        phrase = random_pointer_phrase()
-        caption = f"{phrase} ({step[0]}/{step[1]})" if step else phrase
+        caption = step_caption(random_pointer_phrase(), step)
         # The sprite covers the target area, so put the pill just right of it.
         self._pill_anchor = QPointF(self._point_target[0] + self.PET_SIZE + 4, y)
         self._pill_visit = True
