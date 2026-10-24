@@ -12,6 +12,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from curio.memory_contract import MemorySettings
+from curio.memory_settings import parse_memory_settings
 from curio.pet_config import PetSettings
 
 PLACEHOLDER_WORKER_URL = "https://curio-proxy.your-subdomain.workers.dev"
@@ -107,6 +109,7 @@ class Config:
     backend: str = "cloud"
     local: LocalConfig | None = None
     pet: PetSettings = field(default_factory=PetSettings)
+    memory: MemorySettings = field(default_factory=MemorySettings)
 
     @property
     def point_coords(self) -> str:
@@ -177,6 +180,7 @@ class Config:
 
         try:
             pet = PetSettings.from_dict(data.get("pet", {}))
+            memory = parse_memory_settings(data.get("memory", {}))
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
 
@@ -189,6 +193,7 @@ class Config:
             backend=backend,
             local=local,
             pet=pet,
+            memory=memory,
         )
 
     @staticmethod

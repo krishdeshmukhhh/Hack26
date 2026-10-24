@@ -64,3 +64,10 @@ jump_frequency = 1.0            # 0 disables jumps; multiplier from 0 to 5
 jump_height = 0.0               # 0-64 logical pixels; only clips allowing added arcs
 jump_speed = 1.0                # playback multiplier, 0.25-4
 sleep_after_seconds = 45       # inactivity threshold, 10-3600 seconds
+
+[memory]
+enabled = false
+storage_mode = "local"           # local or session
+automatic_learning = "off"       # off or propose; approval always required
+# storage_path = "C:/Users/you/AppData/Local/Curio/memory.sqlite3"
+# default_expiration_days = 90

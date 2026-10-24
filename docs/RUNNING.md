@@ -231,3 +231,83 @@ project environment. Continue using the documented Python 3.12 setup.
 This host's newest Qt wheel failed with a DLL/procedure error; verification used
 6.8.3. If Qt fails to import, rebuild the environment and check conflicting Qt
 DLLs on PATH. No project interpreter requirement was changed.
+
+## Continuous learning and memories
+
+If pytest reports `PermissionError` for `Temp/pytest-of-<user>` or access-denied
+warnings for `.pytest_cache`, use a fresh temporary directory and disable pytest's
+cache for that run. From `curio-py` in PowerShell:
+
+```powershell
+$testTemp = Join-Path $env:TEMP ('curio-tests-' + [guid]::NewGuid().ToString('N'))
+.venv\Scripts\python.exe -m pytest -p no:cacheprovider --basetemp "$testTemp"
+```
+
+This bypasses the inaccessible directories without changing their permissions or
+deleting them. The unique path is intentional: pytest may clear an explicitly
+supplied base directory. This command passed all 295 tests on this Windows host.
+
+The memory window is available from tray > **Memories**. Memory defaults to off.
+Enable persistent memory with its checkbox; settings are saved immediately and
+stored records remain when disabling it. The default database is resolved by
+`platformdirs.user_data_path("Curio") / "memory.sqlite3"` (normally under
+Local AppData on Windows). This database is separate from the ten-turn session
+conversation buffer and curated knowledge files.
+
+Optional settings, also shown in config.example.toml:
+
+```toml
+[memory]
+enabled = false
+storage_mode = "local"        # "session" keeps records only for this process
+automatic_learning = "off"    # "propose" permits repeated-signal proposals
+# storage_path = "C:/Users/you/AppData/Local/Curio/memory.sqlite3"
+# default_expiration_days = 90
+```
+
+The checkbox changes enabled state immediately. Restart after manually editing
+other configuration values. Switching storage path/mode selects another store;
+records are not migrated. The persistent-memory checkbox switches session mode
+to local when checked. Disabling learning retains session and local records and
+keeps management operations available. It does not clear current chat history.
+
+Say `remember that I prefer short answers` (or `I prefer detailed answers`).
+Open Memories, select the pending record, and click **Approve**. Pending, rejected
+and expired entries are excluded from AI context. **Save edit** returns a memory
+to pending; **Reject**, **Delete memory**, **Clear all memories**, search and export
+are also available. Unsaved content must be saved before approval.
+
+`Actually, I prefer detailed answers instead` proposes a correction. Approving
+it retires conflicting approved preferences; the old preference remains active
+until replacement approval. `recall Python` lists relevant approved memories and
+their IDs. `forget memory <UUID>` validates the exact ID and deletes it in the
+application, without asking the model to execute a deletion. Ambiguous deletion
+requests explain the syntax. Ordinary conversation is not saved automatically.
+
+With automatic policy `propose`, three distinct requests expressing the same
+supported preference may create one pending suggestion. No automatic approval,
+background screenshot archive or model training is performed.
+
+The memory prompt allowance defaults to 512 conservative UTF-8 byte units,
+including its labels/JSON. It is separate from response tokens and history.
+Exact model token counters can be supplied through the runtime API; exact live
+provider token counts are not currently measured. Retrieval failures/timeouts
+omit memory and preserve a normal AI response.
+
+### Memory verification still needed on a real desktop
+
+1. Enable memory, remember a preference, approve it, quit normally and restart.
+   Confirm the approved record is listed and a live model response reflects it.
+2. Correct the preference and approve the replacement; confirm the old value is
+   rejected. Delete a record, restart, and confirm it stays deleted.
+3. Disable memory; confirm remember requests and repeated preference signals add
+   no records, and subsequent requests contain no persistent memory block.
+4. Test a normal push-to-talk screenshot turn, streaming, audible TTS, POINT and
+   walkthrough; interrupt during retrieval and streaming and check recovery.
+5. Check tray/window focus, dialogs, resizing, mixed-DPI displays and shutdown
+   while management operations are in progress. Verify actual Groq/local model
+   behavior and token consumption on the providers used for the demo.
+
+Automated coverage includes separate-process persistence, real offscreen Qt/
+qasync controls, mocked provider requests and the original voice/pointer tests.
+It does not replace these live desktop/audio checks.
