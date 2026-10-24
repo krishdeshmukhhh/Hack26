@@ -418,3 +418,47 @@ Implementation milestones, each followed by targeted updates to PROGRESS.md:
 
 The initial environment passed 53 dependency-independent tests. After installing
 dependencies, all 138 tests pass, including offscreen Qt and lifecycle tests. Physical desktop acceptance remains manual. RUNNING.md documents actual asset/config behavior. Its incorrect Kokoro/tts_engine mention has been removed.
+
+## Continuous learning integration ? 2026-10-24
+
+`memory_contract.py` remains the common dataclass/protocol boundary.
+`app.run` constructs one `MemoryRuntime`, one `MemoryWindow` (Tray > Memories),
+and passes the runtime's `ConversationMemory` to `CompanionManager`. The runtime
+owns the SQLite worker, rule-based engine, serialized store operations and
+post-commit change/notification callbacks on the qasync loop. Shutdown closes
+subscriptions/window tasks and drains the SQLite worker.
+
+`Config.memory` parses the optional `[memory]` table. Defaults are disabled,
+local storage and automatic learning off. The UI toggle persists the memory table
+using atomic file replacement while preserving unrelated parsed configuration.
+Policy changes update the store and conversation adapter together and clear
+session learning evidence. Session storage retains its records across an enable
+toggle; changing storage path/mode opens the selected store without migrating data.
+
+Explicit remember/preference feedback is passed to `RuleBasedLearningEngine` and
+stored as pending proposals. The UI supplies Approve and Reject controls. Approval
+persists the replacement before retiring conflicting memories. Re-proposing a
+rejected/expired value reuses its inactive record as pending; duplicate IDs still
+fail. Multi-record retirement is serialized, not crash-atomic; the shared contract
+does not promise cross-method transactions. Retrieval selects the newest eligible
+value for a preference key if an interrupted retirement left two approved values.
+
+Ordinary successful user turns can supply bounded behavioral evidence only with
+`automatic_learning = "propose"`; three distinct matching signals are required.
+Assistant output is never evidence and conversations are not automatically archived.
+Disabled settings block new learning and retrieval while explicit management
+(list/edit/review/export/delete/clear) remains available. Existing session history
+is retained separately from persistent memory.
+
+Retrieval uses the store interfaces, rechecks records, includes approved global
+response preferences, and renders a bounded JSON data block in the current user
+message. The static system rules identify memories and external reference text
+as untrusted. Memory context is never added to stored conversation history.
+The application currently uses a conservative UTF-8 byte count with a 512-unit
+budget, rather than installing/downloading model tokenizers. The complete rendered
+block is counted. An exact provider tokenizer can be injected into `MemoryRuntime`;
+exact live-provider token accounting has not been verified. Groq/local
+OpenAI-compatible message conversion is unchanged.
+
+See [memory integration review](memory-integration.md) for reviewed source groups,
+verification and outstanding Git/desktop restrictions.

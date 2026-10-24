@@ -23,6 +23,7 @@ class TrayIcon(QSystemTrayIcon):
     """Static system tray icon with Show Curio / Settings / Show History / Quit."""
 
     show_history_requested = Signal()
+    show_memory_requested = Signal()
     show_settings_requested = Signal()
     # "Show Curio" toggled. Off hides the cursor except during an interaction,
     # like the macOS menu bar toggle. Persisted across launches.
@@ -51,6 +52,10 @@ class TrayIcon(QSystemTrayIcon):
         history_action = QAction("Show History", menu)
         history_action.triggered.connect(lambda: self.show_history_requested.emit())
         menu.addAction(history_action)
+
+        memory_action = QAction("Memories", menu)
+        memory_action.triggered.connect(self.show_memory_requested.emit)
+        menu.addAction(memory_action)
 
         pet_menu = menu.addMenu("Pet")
         self._pet_group = QActionGroup(self)

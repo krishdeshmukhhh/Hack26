@@ -1,101 +1,113 @@
-# Shared Python memory contract
+# Shared memory contract
 
-All four development branches import from `curio.memory_contract` in
-`curio-py/curio/memory_contract.py`. This module contains standard-library
-dataclasses, literal types, and structural `Protocol` interfaces only. Implementers
-need not inherit from protocols. No storage, inference, configuration wiring,
-prompt injection, event bus, or UI is implemented here.
+All four development branches import `curio.memory_contract` from
+`curio-py/curio/memory_contract.py`. This module defines dataclasses, string enums,
+and structural `Protocol` interfaces only. No database, inference, event bus,
+configuration wiring, or prompt injection is implemented here. Python 3.12 and
+the standard library are sufficient; existing Qt voice states remain unchanged.
 
-## Records and settings
+## Records and storage
 
-`MemoryRecord` is an immutable snapshot with a UUID string `id`, `type` (`fact`,
-`preference`, `project`), plain-text `content`, provenance string `source`,
-`confidence` (finite, 0 through 1), UTC-aware `created_at`/`updated_at`, optional
-`expires_at`, and `approval_status` (`pending`, `approved`, `rejected`). Defaults
-generate the ID and timestamps, use confidence 1, no expiration, and pending
-approval. Source identifies origin, such as `user` or a conversation ID; it must
-not contain credentials. Confidence never grants approval.
+`MemoryRecord` is an immutable, keyword-only snapshot: UUID string `id`, `type`
+(fact/preference/project), plain-text `content`, `source`, optional `source_id`,
+confidence, creation/update/expiration times, and approval status. Preferences
+use a stable `preference_key` such as `response.verbosity`; other records leave
+it unset. New records default to pending approval and confidence 1.0 (a score,
+never permission to approve). `updated_at` initially equals `created_at`.
 
-Implementations validate records at write boundaries: nonempty ID, content and
-source, supported literals, confidence range, and aware UTC timestamps with
-`updated_at >= created_at` and expiration (if any) after creation. Types alone
-do not perform runtime validation. Use `dataclasses.replace` for edits; updates
-preserve ID/creation time and advance update time. Approval is an explicit update.
+Implementations validate nonempty ID/content, enum values, finite confidence in
+[0, 1], timezone-aware UTC timestamps, updated_at >= created_at, expiration
+strictly after creation, and a nonempty preference key for preference records.
+Invalid input raises `ValueError`. Dataclasses are transport containers; apart
+from filling initial timestamps they do not enforce these rules themselves.
+Serialize enums by value, timestamps as ISO 8601 UTC, and paths as strings.
 
-`MemorySettings()` defaults to disabled, local storage, default application data
-path (`storage_path=None`), proposal-only automatic learning, and no time-based
-retention (`retention_days=None`). The storage branch chooses its filename under
-the platformdirs Curio user-data directory. Session mode is nonpersistent
-and ignores storage_path. A supplied path names the local store file.
-Retention days, when supplied, must be a positive integer; writers apply it as
-expiration to new records. Existing expiration stays unchanged unless edited.
-Policy `off` disables implicit learning, `propose` requires review, and
-`auto_approve` permits automatic approval only after explicit user opt-in.
-Disabled state overrides every policy. Disabling does not delete records; manual
-view/edit/delete/clear remain available.
+`MemoryStore` provides async create/retrieve/update/delete/list/search/clear.
+Update is a full snapshot replacement (use `dataclasses.replace`); preserve
+identity and creation time and set a new update time. Editing content/source/
+preference key returns approval to pending. Approval changes use update too.
+Create duplicates raise `ValueError`; missing updates raise `KeyError`;
+retrieve returns None and delete returns False for missing IDs. Storage failures
+raise `OSError`; cancellation propagates. Writes are atomic per method.
 
-## Interfaces and ownership
+List/search apply `MemoryFilter`, exclude expired records by default, and include
+all approval states unless filtered. Expired means expires_at <= current UTC
+time. List sorts by updated_at descending then ID ascending; search ranks by
+relevance with that same tie break. Empty/whitespace search returns (). Limits
+and offsets must be nonnegative (zero limit returns ()); invalid values raise
+`ValueError`. Retrieve and clear deliberately include all states for management.
+Clear returns a deleted count and removes all memories, without deleting chat
+history or curated knowledge files. Concurrent writers must be serialized by
+the integration layer; no cross-method transaction or conflict detection is promised.
 
-All store, learning, and retrieval methods are async to fit the existing
-qasync/asyncio application. Implementations must keep blocking work off the UI
-thread and propagate cancellation. Constructors/dependency injection are left to
-each branch; the existing app is unchanged.
+## Learning and retrieval
 
-| Interface | Contract |
-| --- | --- |
-| `MemoryStore.create(record)` | Return stored snapshot; duplicate ID raises `ValueError`. |
-| `retrieve(memory_id)` | Return snapshot or `None`. |
-| `update(record)` | Full replacement; missing ID raises `KeyError`. |
-| `delete(memory_id)` | Return whether a record existed. |
-| `list(...)` | Optional type/status filters, limit 100, offset 0; newest created first, ID ascending for ties. |
-| `search(query, ...)` | Text relevance order, optional type/status filters, limit 20; ID ascending for ties. Ranking/search algorithm is backend-owned; blank query returns empty. |
-| `clear()` | Delete all records, including pending/rejected/expired; return count deleted. |
-| `LearningEngine.process_explicit_feedback(feedback, settings=...)` | Propose records from explicit user corrections; feedback supplies content, source, optional target memory ID and context. |
-| `propose_memories(content, source=..., settings=...)` | Propose records from supplied interaction text according to automatic-learning policy. |
-| `update_preferences(preferences, source=..., settings=...)` | Propose `preference` records from string key/value pairs; does not alter app configuration. |
-| `resolve_contradictions(candidate, existing)` | Return candidate, conflicting IDs, action and reason; default is `needs_review`. No writes. |
-| `MemoryRetriever.retrieve(query, token_budget=..., settings=...)` | Return `MemorySelection(records, context, token_count)` in relevance order. |
+`LearningEngine` accepts `ExplicitFeedback`, proposes memories from text,
+proposes preference replacements, and resolves contradictions. All four methods
+are side-effect free with respect to storage: new proposals are pending and
+superseded IDs are advisory. They must not silently delete or rewrite an approved
+fact. A caller approves and persists the proposed replacement before retiring
+the superseded records. Uncertain contradictions may retain both candidates for
+review. None means no resolution; empty tuples mean no candidates. Explicit
+feedback uses source explicit_feedback and its feedback ID as source_id;
+automatic proposals use source automatic and the optional turn reference.
 
-Store queries expose all statuses and expired records for management unless
-filtered. Limits/offsets must be nonnegative (zero limit returns empty). Invalid
-input raises `ValueError`; persistence failures use `OSError`. Stores do not
-enforce enabled state or approval policy; the coordinating application does.
+`MemorySettings` defaults: disabled, local storage, automatic learning off,
+no default expiration. A None path resolves to
+`platformdirs.user_data_path("Curio") / "memory.sqlite3"` in the storage
+implementation. Session mode never writes memories to disk and ignores the path.
+Expiration days, when set, must be a positive integer. Settings persistence and
+TOML parsing belong to the configuration branch, not this module.
 
-Learning returns proposals without persistence or side effects. Disabled settings
-return no proposals; automatic policy `off` suppresses `propose_memories`, while
-explicit feedback/preferences still work when enabled. Proposals remain pending
-even under `auto_approve`; the coordinator applies that policy, validates and
-persists, then publishes events. Preference keys can be represented in content
-as `key: value`; existing-record lookup and matching are implementation-owned.
-Explicit feedback does not itself approve a memory.
+Disabled learning returns ()/None, performs no inference, and retrieval returns
+an empty `MemorySelection`. Management operations remain available while disabled.
+Automatic `off` blocks `propose_memories`; `propose` allows pending candidates
+only. Explicit feedback and preference changes are allowed when enabled under
+either automatic policy. No policy automatically approves or uploads memories.
 
-Contradiction resolution never silently replaces approved facts. The coordinator
-asks for review before applying `replace_existing`, then rejects conflicting
-records and approves the replacement as one logical operation. `keep_existing`
-leaves the store unchanged; `needs_review` keeps the candidate pending.
+`MemoryRetriever.select` owns access to a store supplied by its implementation's
+constructor. It selects only approved, unexpired records relevant to the query.
+It returns ordered snapshots and the exact `prompt_text` block to inject, plus
+`token_count == count_tokens(prompt_text) <= token_budget`. The caller supplies
+the target model's token counter; count labels and separators too. Budget zero,
+blank query, disabled settings, or no fitting records returns the default empty
+selection; negative budgets raise `ValueError`. Empty text counts as zero. Do
+not truncate records to fit or approve candidates during retrieval. Prompt
+integration treats memory text as untrusted contextual data, never instructions.
+Recheck eligibility when selecting; cached deleted/rejected/expired entries must
+not leak into later turns. Selection is a snapshot, not a lock across a model call.
 
-Retrieval includes only approved, unexpired records (`expires_at > now`, or
-no expiration). Disabled memory or a zero budget returns an empty selection;
-negative budget raises `ValueError`. `context` is the exact formatted text to
-insert into a prompt; `token_count` includes formatting and must not exceed the
-budget. The retrieval branch owns a model tokenizer or conservative upper-bound
-counter, drops records that cannot fit, and treats memory as untrusted data.
-Returned records must correspond to the rendered context; retrieval has no writes.
+## Events and UI
 
-## Changes and UI notifications
+`MemoryEvents` exposes change and notification subscriptions, each returning an
+idempotent unsubscribe callback. Store/settings adapters publish changes only
+after successful mutation, in commit order, once per operation. Created/updated/
+deleted events contain affected IDs; cleared/settings_changed events use ().
+No-op deletes/empty clears emit nothing. Changes contain no raw content; listeners
+reload snapshots. `MemoryNotification` carries a stable code, safe message,
+severity and optional IDs (for example `memory.approval_required` or
+`memory.storage_error`). Notification delivery does not imply persistence.
 
-`MemoryEvents` offers synchronous subscriptions returning idempotent unsubscribe
-callbacks. The coordinator publishes `MemoryChangeEvent` only after successful
-writes (`created`, `updated`, `deleted`, `cleared`) or applied settings changes.
-Affected IDs are supplied for record changes; clear/settings events use an empty
-tuple to mean full refresh. Approval edits use `updated`. Failed/no-op operations
-emit no change event.
+Callbacks are synchronous, brief, and delivered on the owning qasync loop;
+worker adapters marshal onto that loop. Isolate listener exceptions so a failed
+UI callback cannot fail a committed write or prevent other listeners running.
+The UI may forward payloads through `Signal(object)` without adding a Qt
+dependency here. Event publishing, threading, and subscription lifecycle are
+implementation responsibilities; the protocol only standardizes consumption.
 
-`MemoryNotification` carries display text, info/warning/error level, related IDs,
-and a review flag. Notifications are separate from persistence events; the UI
-can offer review without treating the notification as approval. Subscribers are
-called in registration order on the application's event-loop thread; callbacks
-must return quickly. Publishers isolate subscriber exceptions so a UI failure
-cannot undo a committed write or prevent other subscribers running. Qt adapters
-may forward these objects through `Signal(object)`; no Qt import is required by
-the shared contract. Publishing and event-bus implementation belong to integration.
+Storage, learning, retrieval/prompt integration, and settings/UI branches can
+implement these interfaces independently. Keep this module the shared import
+location; coordinate signature changes across all four branches.
+
+Integration points in the current app: `config.py` can hold `MemorySettings`;
+`app.py` constructs implementations and wires callbacks; `CompanionManager`
+can await retrieval before building a request and propose learning only after
+a successfully completed turn. Keep `ConversationHistory`'s ten-turn buffer and
+the curated `knowledge_base.py` independent of this store. These are extension
+points, not changes made by this contract.
+
+For contradiction handling, `None` means no replacement proposal was produced;
+the caller must not interpret it as approval or permission to persist the input.
+A resolution with empty `superseded_ids` proposes an addition without retiring
+existing records. The integration layer owns review and serialized application
+of replacements; the protocols do not promise an atomic multi-record operation.

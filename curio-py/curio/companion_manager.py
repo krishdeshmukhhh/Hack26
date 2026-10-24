@@ -17,6 +17,7 @@ import logging
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, Protocol
+from uuid import uuid4
 
 from PySide6.QtCore import QByteArray, QObject, QTimer, Signal
 
@@ -33,6 +34,7 @@ from curio.config import Config
 from curio.conversation_history import ConversationHistory
 from curio.hotkey import HotkeyMonitor
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
+from curio.memory_conversation import ConversationMemory
 from curio.mic_capture import MicCapture
 from curio.point_mapper import map_point_to_screen
 from curio.point_parser import StepTag, parse_point_tag, parse_step_tag
@@ -107,9 +109,12 @@ class CompanionManager(QObject):
         panel_visibility_controller: CaptureVisibilityController,
         click_watcher: ClickWatcher | None = None,
         parent: QObject | None = None,
+        *,
+        memory: ConversationMemory | None = None,
     ) -> None:
         super().__init__(parent)
 
+        self._memory = memory
         self._config = config
         self._mic = mic
         self._hotkey = hotkey
@@ -471,74 +476,86 @@ class CompanionManager(QObject):
             # Emit the final transcript so the UI can display it.
             self.final_transcript.emit(text)
 
-            # Hide the panel so it doesn't appear in the screenshot.
-            # The async sleep lets qasync process the Qt opacity change
-            # AND lets pending asyncio tasks (stop_stream cleanup) settle
-            # — avoids re-entrancy that processEvents() would cause.
-            self._panel_visibility_controller.hide_for_capture()
-            await asyncio.sleep(0.05)
-            try:
-                screenshots = await asyncio.to_thread(self._screen_capture_fn)
-                self._current_screenshots = screenshots
-            finally:
-                self._panel_visibility_controller.restore_after_capture()
+            local_reply = None
+            if self._memory is not None and continuing_step is None:
+                local_reply = await self._memory.handle_intent(text)
+            if generation != self._generation or self._cancel_flag:
+                return
+            if local_reply is not None:
+                full_text = local_reply
+            else:
+                # Hide the panel so it doesn't appear in the screenshot.
+                # The async sleep lets qasync process the Qt opacity change
+                # AND lets pending asyncio tasks (stop_stream cleanup) settle
+                # — avoids re-entrancy that processEvents() would cause.
+                self._panel_visibility_controller.hide_for_capture()
+                await asyncio.sleep(0.05)
+                try:
+                    screenshots = await asyncio.to_thread(self._screen_capture_fn)
+                    self._current_screenshots = screenshots
+                finally:
+                    self._panel_visibility_controller.restore_after_capture()
 
-            # Build image content blocks.
-            image_blocks: list[dict[str, Any]] = []
-            for screenshot in screenshots:
-                b64 = base64.b64encode(screenshot.jpeg_bytes).decode("ascii")
-                image_blocks.append({"type": "text", "text": screenshot.label})
-                image_blocks.append(
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": b64,
-                        },
-                    }
+                # Build image content blocks.
+                image_blocks: list[dict[str, Any]] = []
+                for screenshot in screenshots:
+                    b64 = base64.b64encode(screenshot.jpeg_bytes).decode("ascii")
+                    image_blocks.append({"type": "text", "text": screenshot.label})
+                    image_blocks.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": b64,
+                            },
+                        }
+                    )
+
+                # Build messages from conversation history. Walkthrough reminders
+                # go only into this request, not into the stored history.
+                request_text = text
+                if continuing_step is not None:
+                    request_text = f"{text}\n{walkthrough_reminder(continuing_step + 1)}"
+                elif is_howto_question(text):
+                    request_text = f"{text}\n{walkthrough_reminder()}"
+                if self._memory is not None:
+                    selection = await self._memory.select(text)
+                    if selection.prompt_text:
+                        image_blocks.insert(0, {"type": "text", "text": selection.prompt_text})
+                messages = self._history.messages_for_request(
+                    current_user_text=request_text,
+                    current_images=image_blocks,
                 )
 
-            # Build messages from conversation history. Walkthrough reminders
-            # go only into this request, not into the stored history.
-            request_text = text
-            if continuing_step is not None:
-                request_text = f"{text}\n{walkthrough_reminder(continuing_step + 1)}"
-            elif is_howto_question(text):
-                request_text = f"{text}\n{walkthrough_reminder()}"
-            messages = self._history.messages_for_request(
-                current_user_text=request_text,
-                current_images=image_blocks,
-            )
+                # Detect active app and load KB
+                window_title = get_foreground_window_title()
+                kb_content = None
+                app_name = None
+                if self._knowledge_dir is not None:
+                    apps = load_kb_from_disk(self._knowledge_dir)
+                    matched = match_app(window_title, apps)
+                    if matched is not None:
+                        app_name = matched.name
+                        kb_content = select_content(matched, text)
+                        logger.info("KB loaded: %s (%d chars)", app_name, len(kb_content))
+                    else:
+                        logger.debug("no KB match for window: %s", window_title)
 
-            # Detect active app and load KB
-            window_title = get_foreground_window_title()
-            kb_content = None
-            app_name = None
-            if self._knowledge_dir is not None:
-                apps = load_kb_from_disk(self._knowledge_dir)
-                matched = match_app(window_title, apps)
-                if matched is not None:
-                    app_name = matched.name
-                    kb_content = select_content(matched, text)
-                    logger.info("KB loaded: %s (%d chars)", app_name, len(kb_content))
-                else:
-                    logger.debug("no KB match for window: %s", window_title)
+                system_prompt = build_system_prompt(
+                    kb_content, app_name, point_coords=self._config.point_coords
+                )
 
-            system_prompt = build_system_prompt(
-                kb_content, app_name, point_coords=self._config.point_coords
-            )
+                if generation != self._generation:
+                    return
 
-            if generation != self._generation:
-                return
-
-            # Stay in PROCESSING (spinner) while the model answers, as the
-            # macOS app does; RESPONDING starts when there's something to say.
-            full_text = await self._llm.send(
-                messages,
-                system=system_prompt,
-                model=self._current_model,
-            )
+                # Stay in PROCESSING (spinner) while the model answers, as the
+                # macOS app does; RESPONDING starts when there's something to say.
+                full_text = await self._llm.send(
+                    messages,
+                    system=system_prompt,
+                    model=self._current_model,
+                )
 
             # Only commit to history and emit completion if not cancelled.
             if not self._cancel_flag and generation == self._generation:
@@ -547,8 +564,12 @@ class CompanionManager(QObject):
 
                 # Strip STEP and POINT tags from the spoken text, fly the
                 # companion to the target, and track walkthrough progress.
-                without_step, step = parse_step_tag(full_text)
-                spoken_text, point_tag = parse_point_tag(without_step)
+                if local_reply is not None:
+                    # Recall payloads are data: never parse their POINT/STEP tags.
+                    spoken_text, point_tag, step = full_text, None, None
+                else:
+                    without_step, step = parse_step_tag(full_text)
+                    spoken_text, point_tag = parse_point_tag(without_step)
                 # Store the answer without tags, like the macOS app, so old
                 # coordinates don't confuse later turns.
                 self._history.append(text, spoken_text)
@@ -576,6 +597,8 @@ class CompanionManager(QObject):
                         )
 
                 self._speak_task = asyncio.ensure_future(self._speak(spoken_text, generation))
+                if self._memory is not None and local_reply is None and continuing_step is None:
+                    await self._memory.learn_from_turn(text, spoken_text, source_id=str(uuid4()))
 
         except asyncio.CancelledError:
             logger.debug("turn cancelled")

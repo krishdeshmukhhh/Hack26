@@ -30,10 +30,12 @@ from curio.companion_manager import CompanionManager
 from curio.config import Config, ConfigError
 from curio.hotkey import HotkeyMonitor
 from curio.logging_config import configure_logging
+from curio.memory_runtime import MemoryRuntime
 from curio.mic_capture import MicCapture
 from curio.pet_config import PetSettings, save_pet_selection
 from curio.screen_capture import capture_all
 from curio.ui.history_window import HistoryWindow
+from curio.ui.memory_window import MemoryWindow
 from curio.ui.pet_widget import PetCompanionWidget
 from curio.ui.tray_icon import TrayIcon
 
@@ -157,7 +159,18 @@ def run() -> int:
     # ------------------------------------------------------------------
     transcription: TranscriptionClient | WhisperTranscriptionClient | None = None
     tts: TTSClient | SystemTTSClient | KokoroTTSClient | None = None
+    memory_runtime = None
+    memory_window = None
     if result.config is not None:
+        memory_runtime = MemoryRuntime(result.config.memory, config_path=result.config_path)
+        memory_window = MemoryWindow(
+            memory_runtime, settings=memory_runtime.settings,
+            save_settings=memory_runtime.save_settings, events=memory_runtime,
+        )
+        tray_icon.show_memory_requested.connect(memory_window.show)
+        tray_icon.show_memory_requested.connect(memory_window.raise_)
+        tray_icon.show_memory_requested.connect(memory_window.activateWindow)
+        memory_window.settings_changed.connect(memory_window.set_settings)
         local = result.config.local
         if local is not None:
             logger.info("local backend: %s at %s", local.llm_model, local.llm_base_url)
@@ -184,6 +197,7 @@ def run() -> int:
             tts=tts,
             screen_capture_fn=capture_all,
             panel_visibility_controller=companion,
+            memory=memory_runtime.conversation,
         )
 
         # State → companion
@@ -256,4 +270,8 @@ def run() -> int:
         if isinstance(tts, KokoroTTSClient):
             loop.create_task(tts.preload())
         loop.run_forever()
+        if memory_window is not None:
+            memory_window.close()
+        if memory_runtime is not None:
+            loop.run_until_complete(memory_runtime.close())
     return 0

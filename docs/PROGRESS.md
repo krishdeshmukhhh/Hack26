@@ -237,3 +237,44 @@ widget/config integration tests. All work remains on codex/animated-pet-design.
 ### Main integration verification
 Merged the accelerated pursuit and arrival hops with main's newer overlay and walkthrough changes. Resolved documentation/test conflicts while preserving both sets of behavior. All 219 application tests pass on Python 3.12.15 after integration.
 
+## Continuous learning integration ? 2026-10-24
+
+Integrated the available storage, learning, UI and conversation implementations
+in the `main` working tree. Four separate development branch refs were not present;
+the changes arrived as modified/untracked files. Reviewed those source groups and
+their available summaries before connecting them. This is not a record of four
+Git merges. Git index writes are denied in this environment, so no integration
+commit or merge commit was created.
+
+Added MemoryRuntime and validated memory settings parsing/persistence; wired the
+real SQLite store, rule-based learning, memory window and conversation adapter in
+app startup/shutdown. Resolved missing approval controls, lexical-only preference
+retrieval, immutable store policy updates, and the management-while-disabled
+contract discrepancy. Fixed a storage test fixture that accidentally set an update
+time before its default creation time. Preserved worker-based SQLite I/O, async
+cancellation, ten-turn history, provider conversion and voice/pointer contracts.
+
+Verification on Windows / Python 3.12.15:
+
+- `uv run pytest`: **295 passed**, including all four component suites and six
+  integration tests. `UV_NO_SYNC=true` used the existing environment after uv's
+  attempted dependency sync was blocked by restricted network access. UV cache
+  was redirected into the workspace; uv was added to PATH from its installed path.
+- Verified persistence across separate Python processes, approved preferences
+  reaching a mocked AI turn, preference correction/reversal, disabled learning,
+  local/session policy changes, deletion, automatic proposal gating, and startup/
+  shutdown wiring. This verifies request influence, not compliance by a live model.
+- Real MemoryWindow and real SQLite/learning services exercised on qasync with
+  offscreen Qt: live event refresh, approve, edit/reapproval, reject, disable and
+  delete. Existing suites cover export, clear, errors, stale edits, streaming,
+  cancellation, screenshot construction, TTS fallback and POINT/walkthroughs.
+- `uv run ruff check .`: **23 existing violations in unchanged files**. Scoped
+  lint on the memory components and integration changes passes. Left unrelated
+  client/hotkey/geometry/test formatting unchanged.
+- Interactive Windows smoke could not run: Computer Use native pipe unavailable,
+  including after retries/session reset. No physical microphone, audible TTS,
+  live Groq/local server, desktop click-through or mixed-DPI test was performed.
+
+Do not mark the memory release complete until the Windows/live-provider checklist
+in RUNNING.md is performed and the available changes are reviewed/committed in a
+Git-writable checkout. See memory-integration.md for remaining limitations.
