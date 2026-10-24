@@ -70,7 +70,7 @@ def test_tts_engine_config(tmp_path: Path) -> None:
     path.write_text('backend = "local"\n')
     local = Config.from_path(path).local
     assert local is not None
-    assert (local.tts_engine, local.whisper_model) == ("kokoro", "small.en")
+    assert (local.tts_engine, local.whisper_model) == ("kokoro", "base.en")
 
     path.write_text('backend = "local"\n[local]\ntts_engine = "system"\n')
     assert Config.from_path(path).local.tts_engine == "system"

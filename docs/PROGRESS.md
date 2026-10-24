@@ -81,7 +81,7 @@ Added `backend = "local"`:
   - Speech starts ~0.4 s after the answer arrives, because it's spoken sentence by sentence.
   - Default onnxruntime settings were 6–9× slower once other threads were busy, so it now uses 8 threads with spinning off (0.23× real time on the laptop CPU).
   - Falls back to the Windows voice if Kokoro can't load.
-- **Whisper `small.en`** is now the default (was `base.en`).
+- **Whisper `small.en` tried and reverted.** It took 2–5 s per question on the laptop CPU against 0.7–1.4 s for `base.en`, and transcribed our test sentence no better. The default stays `base.en`; `small.en` makes sense only with `whisper_device = "cuda"`.
 - **Speech bubble** next to the triangle. The original Curio had one; the Windows port never built it.
   - Streams the answer, keeping the newest lines.
   - Titles the pointing target and walkthrough step.

@@ -26,7 +26,7 @@ No API keys are needed for any of these.
    ```
 3. Run it once (`uv run python -m curio`), then quit from the tray icon. That
    creates `%APPDATA%\Curio\config.toml`. The first run also downloads
-   the Whisper model (~500 MB) and the Kokoro voice (~350 MB) in the
+   the Whisper model (~150 MB) and the Kokoro voice (~350 MB) in the
    background, so give it a few minutes on first start. Edit the config:
    ```toml
    backend = "local"
@@ -36,7 +36,7 @@ No API keys are needed for any of these.
    llm_model = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"   # must match SERVED_MODEL_NAME on the server
    llm_api_key = "<contents of the server's api_key file>"
    point_coords = "norm1000"                         # Qwen3-VL's coordinate format
-   whisper_model = "small.en"                        # speech-to-text accuracy
+   whisper_model = "base.en"                         # "small.en" is more accurate but 2-5 s slower on CPU
    tts_engine = "kokoro"                             # or "system" for Windows voices
    tts_voice = ""                                    # kokoro: e.g. "af_heart", "am_michael", "bf_emma"
    ```
@@ -148,7 +148,7 @@ also gives up after 2 minutes without a click. Any left click counts as
 | Log says `cannot reach LLM server at http://localhost:8000/v1` | Same as above: check the VPN, the tunnel window, and `tmux ls` on the server. |
 | Tunnel window spams `channel 2: open failed: connect failed: Connection refused` | The tunnel is up but nothing is listening on the server's port. The server is still loading or crashed; check its log. |
 | `bind: Address already in use` when opening the tunnel | Something on the laptop already uses 8000. Use `-L 8001:localhost:<PORT>` and set `llm_base_url = "http://localhost:8001/v1"`. |
-| It mishears you | Use a better Whisper model (`whisper_model = "small.en"`), check Windows → Privacy → Microphone, and make sure the right mic is the default. |
+| It mishears you | Try `whisper_model = "small.en"` (more accurate, but adds 2–5 s per question on CPU), check Windows → Privacy → Microphone, and make sure the right mic is the default. |
 | The cursor points at the wrong spot | Check `point_coords` matches the model (`norm1000` for Qwen3-VL). Run `./test_vision.sh` on the server: if it passes, the problem is on the laptop side. |
 | No sound | Check the volume and default output device. If Kokoro failed to load, the log says why and Curio uses the Windows voice instead. |
 | Voice sounds robotic | That's the Windows voice: Kokoro is off (`tts_engine = "system"`) or failed to load (see the log). |
