@@ -1,0 +1,162 @@
+"""Microphone capture and audio framing for voice requests."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import sounddevice as sd
+from PySide6.QtCore import (
+    Q_ARG,
+    QByteArray,
+    QMetaObject,
+    QObject,
+    Qt,
+    Signal,
+    Slot,
+)
+
+# PRD § 6a/6c. Deepgram streaming linear16 accepts 16 kHz mono directly.
+SAMPLE_RATE_HZ = 16000
+CHANNELS = 1
+# 100 ms at 16 kHz = 1600 frames per block.
+BLOCK_SIZE_FRAMES = 1600
+# int16 peak magnitude; |-32768| is the worst-case absolute value, which
+# is what we divide by when normalizing RMS to [0, 1].
+INT16_PEAK = 32768.0
+
+
+class MicCapture(QObject):
+    """Qt-friendly microphone capture backed by ``sounddevice``.
+
+    Signals
+    -------
+    pcm_chunk(bytes)
+        Raw little-endian int16 mono PCM for one 100 ms block. The bytes
+        object is an independent copy of the audio thread's buffer — safe
+        to hold onto, serialize, or forward to a network upload.
+    audio_level(float)
+        RMS of the block normalized into ``[0.0, 1.0]``. Intended for the
+        waveform widget.
+    error(str)
+        User-visible error string. Emitted when the input stream cannot
+        be opened or when an unexpected exception happens inside the
+        audio callback.
+    """
+
+    # NOTE: pcm_chunk uses QByteArray (not Python bytes) because PySide6
+    # does not auto-register the native ``bytes`` type as a QMetaType, so
+    # Q_ARG(bytes, ...) fails at runtime under QueuedConnection. Consumers
+    # that need real bytes can call ``bytes(qba)`` or ``qba.data()``.
+    pcm_chunk = Signal(QByteArray)
+    audio_level = Signal(float)
+    error = Signal(str)
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._stream: sd.InputStream | None = None
+
+    # ------------------------------------------------------------------
+    # lifecycle
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        """Open and start the input stream. Idempotent.
+
+        On PortAudio failure (no default input device, privacy block,
+        driver error) this emits ``error(...)`` and leaves the stream
+        closed — callers should treat ``start()`` as best-effort and
+        listen on ``error`` rather than catching exceptions.
+        """
+        if self._stream is not None:
+            return
+
+        try:
+            stream = sd.InputStream(
+                samplerate=SAMPLE_RATE_HZ,
+                channels=CHANNELS,
+                dtype="int16",
+                blocksize=BLOCK_SIZE_FRAMES,
+                callback=self._audio_callback,
+            )
+            stream.start()
+        except sd.PortAudioError:
+            self._post_error("microphone unavailable — check privacy settings")
+            return
+        except Exception as exc:  # noqa: BLE001 — surface any startup failure
+            self._post_error(f"microphone unavailable: {exc}")
+            return
+
+        self._stream = stream
+
+    def stop(self) -> None:
+        """Stop and close the input stream. Idempotent."""
+        stream = self._stream
+        self._stream = None
+        if stream is None:
+            return
+        try:
+            stream.stop()
+        finally:
+            stream.close()
+
+    # ------------------------------------------------------------------
+    # sounddevice callback (runs on PortAudio's audio thread)
+    # ------------------------------------------------------------------
+    def _audio_callback(
+        self,
+        indata: np.ndarray,
+        frames: int,  # noqa: ARG002 — required by sounddevice callback signature
+        time_info,  # noqa: ANN001, ARG002 — CFFI struct, not type-friendly
+        status: sd.CallbackFlags,  # noqa: ARG002 — overruns are non-fatal
+    ) -> None:
+        # sounddevice docs: "The memory of the input data is only valid
+        # during the callback. If you want to keep the data for later,
+        # you have to make a copy." indata.tobytes() copies into a fresh
+        # bytes object, which is safe to hand off via a queued signal.
+        try:
+            data = indata.tobytes()
+            # RMS in int16 space, normalized to [0, 1]. Clamp because a
+            # peak sample of -32768 slightly exceeds INT16_PEAK after the
+            # square-root / divide and we don't want the waveform widget
+            # to receive values > 1.0.
+            rms_raw = math.sqrt(float(np.mean(indata.astype(np.float32) ** 2)))
+            level = min(rms_raw / INT16_PEAK, 1.0)
+        except Exception as exc:  # noqa: BLE001 — callback must not raise
+            self._post_error(f"audio capture error: {exc}")
+            return
+
+        QMetaObject.invokeMethod(
+            self,
+            "_emit_pcm_chunk",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(QByteArray, QByteArray(data)),
+        )
+        QMetaObject.invokeMethod(
+            self,
+            "_emit_audio_level",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(float, level),
+        )
+
+    def _post_error(self, msg: str) -> None:
+        QMetaObject.invokeMethod(
+            self,
+            "_emit_error",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, msg),
+        )
+
+    # ------------------------------------------------------------------
+    # main-thread signal emitters
+    # ------------------------------------------------------------------
+    @Slot(QByteArray)
+    def _emit_pcm_chunk(self, data: QByteArray) -> None:
+        self.pcm_chunk.emit(data)
+
+    @Slot(float)
+    def _emit_audio_level(self, level: float) -> None:
+        self.audio_level.emit(level)
+
+    @Slot(str)
+    def _emit_error(self, msg: str) -> None:
+        self.error.emit(msg)
