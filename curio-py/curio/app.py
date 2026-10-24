@@ -31,9 +31,10 @@ from curio.config import Config, ConfigError
 from curio.hotkey import HotkeyMonitor
 from curio.logging_config import configure_logging
 from curio.mic_capture import MicCapture
+from curio.pet_config import PetSettings, save_pet_selection
 from curio.screen_capture import capture_all
-from curio.ui.companion_widget import CompanionWidget
 from curio.ui.history_window import HistoryWindow
+from curio.ui.pet_widget import PetCompanionWidget
 from curio.ui.tray_icon import TrayIcon
 
 APP_NAME = "Curio"
@@ -117,7 +118,20 @@ def run() -> int:
         logger.warning("config error: %s", result.config_error)
 
     tray_icon = TrayIcon()
-    companion = CompanionWidget()
+    companion = PetCompanionWidget(settings=result.config.pet if result.config else PetSettings())
+    tray_icon.set_selected_pet(companion.settings.species)
+
+    def select_pet(species: str) -> None:
+        try:
+            save_pet_selection(result.config_path, species)
+        except (OSError, ValueError) as exc:
+            logger.error("cannot save pet selection: %s", exc)
+            tray_icon.set_selected_pet(companion.settings.species)
+            companion.flash_error(str(exc))
+            return
+        companion.select_pet(species)
+
+    tray_icon.pet_selected.connect(select_pet)
     history = HistoryWindow()
 
     mic = MicCapture()
@@ -174,6 +188,9 @@ def run() -> int:
 
         # State → companion
         manager.state_changed.connect(companion.set_state)
+        manager.response_delta.connect(companion.text_started)
+        manager.speaking_changed.connect(companion.set_speaking)
+        manager.security_warning.connect(companion.security_warning)
 
         # Audio level → companion waveform
         manager.audio_level.connect(companion.set_audio_level)

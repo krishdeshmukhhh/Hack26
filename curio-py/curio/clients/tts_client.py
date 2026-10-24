@@ -10,7 +10,7 @@ import asyncio
 import logging
 
 import httpx
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ class TTSClient(QObject):
         self._player.setAudioOutput(self._audio_output)
 
         self._player.mediaStatusChanged.connect(self._on_media_status)
+        self._player.playbackStateChanged.connect(self._on_playback_state)
 
         # Lifetime-critical: these must survive for the duration of playback.
         self._current_bytes: bytes | None = None
@@ -78,11 +79,9 @@ class TTSClient(QObject):
             self._current_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
 
             self._player.setSourceDevice(self._current_buffer)
-            self._player.play()
-            self.playback_started.emit()
-
             loop = asyncio.get_running_loop()
             self._playback_future = loop.create_future()
+            self._player.play()
             await self._playback_future
         except Exception as exc:
             msg = f"TTS playback failed: {exc}"
@@ -98,6 +97,10 @@ class TTSClient(QObject):
     # ------------------------------------------------------------------
     # Internal slots
     # ------------------------------------------------------------------
+
+    def _on_playback_state(self, state: QMediaPlayer.PlaybackState) -> None:
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self.playback_started.emit()
 
     def _on_media_status(self, status: QMediaPlayer.MediaStatus) -> None:
         if status == QMediaPlayer.MediaStatus.EndOfMedia:

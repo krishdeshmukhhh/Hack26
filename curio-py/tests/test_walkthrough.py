@@ -57,6 +57,8 @@ class FakeLLM(QObject):
 
 class FakeTTS(QObject):
     error = Signal(str)
+    playback_started = Signal()
+    playback_finished = Signal()
 
     def __init__(self) -> None:
         super().__init__()

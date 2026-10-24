@@ -100,6 +100,23 @@ Read the original's Swift source to match its overlay exactly; see the table in
 - Launch fade-in plus "hey! i'm curio"; tray **Show Curio** toggle; history trimmed to 10 tagless exchanges.
 - Verified with screenshots of every state, plus 9 geometry tests.
 
+### Merged: Mac-style overlay + animated pets
+`merge-pets` combines `mac-parity-overlay` with PR #1 (`codex/animated-pet-design`).
+- The pet subclassed the old companion's internals (cursor timer, `_track_cursor`,
+  pulse/breathing waveforms, `fly_to(x, y)`), which the Mac-parity rewrite removed.
+  The base widget now has explicit hooks (`_advance_motion`, `_snap_to_cursor`,
+  `_bubble_anchor`, `_is_pointing`) and the pet overrides those instead.
+- Pets get the Mac pointer pill beside the sprite, the launch greeting, red
+  error pills, the waveform and spinner, and the Show Curio toggle.
+- Walkthrough steps keep the pet at the target until the click (the controller's
+  normal visit is 800 ms); the pill fades when the pet's visit ends.
+- Manager keeps both sides: the PR's turn generations / `speaking_changed`
+  and the walkthrough flow with the spinner-until-answer timing. The pet's
+  "text started" reaction now also fires during PROCESSING, since answers
+  stream before RESPONDING.
+- Test fakes updated to the real interfaces (`escape_pressed`, TTS playback
+  signals). 167 tests pass; every pet state checked with on-screen screenshots.
+
 ## Current status
 
 Working end to end, with no API keys: voice → Whisper → Qwen3-VL on the H100
@@ -129,3 +146,38 @@ In priority order:
 - **Walkthrough clicks:** any left click counts as "step done", including a click somewhere unrelated.
 - **Step counts:** the model sometimes underestimates the number of steps. When it says `[STEP:1/1]` for a multi-click task, the walkthrough ends early; asking "what's next?" continues it.
 - **Model quality:** the 30B model is sometimes sloppy about where things are (it called the centred Windows 11 Start button "bottom left"). Qwen3-VL-32B would be the upgrade when a full GPU is free.
+
+## Animated pets - 2026-10-24
+
+Implemented on `codex/animated-pet-design` after design/mapping approval.
+
+### Verified milestone: player and behavior
+- Four packaged sheets, explicit mappings and per-frame jump timing.
+- Smooth movement, randomized idle play and traversal hops, cooldowns, data-driven
+  profiles, sleep/wake and reduced motion. No queued jumps or extra vertical arc.
+- Tests cover frame bounds/alpha, one-shot recovery, live destinations, priority,
+  cooldown, profile selection and missing-clip fallback. Slow movement counts as
+  activity and sleeping pets are not awakened by optional idle scheduling.
+
+### Verified milestone: settings and integration
+- Tray > Pet switches species immediately and persists in the existing TOML file,
+  preserving comments and unrelated settings. Existing configs use defaults.
+- Selection preserves streaming/speaking and POINT lifecycle. Point arrival holds
+  800 ms then resumes cursor following independent of TTS.
+- Retained base Windows window behavior, microphone/output waveforms, capture
+  hide/restore and triangle asset fallback. Separate text-streaming and actual
+  playback events drive presentation; cancellation stops pending synthesis.
+- Security warning has a presentation event, not automatic detection.
+- Fixed existing CRLF event parsing in cloud SSE after original tests exposed the
+  issue on this Windows checkout.
+
+### Verification and remaining checks
+- **138 tests pass** with Python 3.13.5/PySide6 6.8.3. Declared support remains
+  Python 3.12, which was unavailable here. Scoped pet/integration Ruff checks pass; repository-wide Ruff still reports
+  22 existing style issues, including two in the minimally patched SSE client.
+- Inspected 24 actual offscreen Qt renders: pet-review/implemented-preview.png.
+- Manual verification remains for desktop click-through/focus, real audio timing,
+  full-speed animation feel, physical multi-monitor/mixed DPI, display hot-unplug
+  and frozen executable startup. No live model-server check was performed.
+- Cat speaking is a grooming fallback; sleep is a resting pose. Jump height is
+  reserved for future external-arc clips and does not affect these four sheets.

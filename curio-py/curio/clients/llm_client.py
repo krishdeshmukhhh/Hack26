@@ -47,7 +47,7 @@ def parse_anthropic_sse_stream(raw: bytes) -> Iterator[str]:
     if not raw:
         return
 
-    text = raw.decode("utf-8", errors="replace")
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
     # Split on blank lines to get individual SSE events.
     chunks = text.split("\n\n")

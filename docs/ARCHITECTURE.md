@@ -36,6 +36,8 @@ signals and methods in both backends.
 | `ui/pointer_bubble.py` | Small blue pill typed out letter by letter ("right here!", "hey! i'm curio"), red for errors. |
 | `ui/window_effects.py` | Win32 setup shared by both overlays (click-through, no Windows 11 border or shadow). |
 | `click_watcher.py` | Global left-click listener used to advance walkthroughs. |
+| `ui/pet_widget.py` | Animated pet presentation (sprite instead of triangle) and monitor placement. Subclasses `CompanionWidget`. |
+| `pets.py`, `pet_config.py` | Sprite timing, behavior profiles and persisted pet preferences. |
 | `ui/history_window.py`, `ui/tray_icon.py` | Transcript window and tray menu. |
 
 ### Backends (`backend` in config.toml)
@@ -131,12 +133,255 @@ key, reached from the laptop through `ssh -L 8000:localhost:8000`. See
 
 ```powershell
 cd curio-py
-uv run pytest        # 110 tests, no network or GPU needed
+uv run pytest        # includes offscreen pet tests; no network or GPU needed
 uv run ruff check .
 ```
 
 The parsers, config validation, coordinate mapping, message conversion,
 Whisper buffering, hotkey stuck-key handling, flight geometry, pill text,
-Kokoro's chunking and fallback, and the full walkthrough flow (with fake
-clients) are unit-tested. The overlay rendering, audio devices and live
-servers aren't.
+Kokoro's chunking and fallback, the full walkthrough flow (with fake
+clients), and the pet UI's offscreen rendering and mocked interaction
+lifecycles are unit-tested. Physical audio devices, live servers and
+multi-monitor desktop behavior aren't.
+
+## Animated pets - approved design and implementation
+
+The design and mappings were approved and implemented on
+`codex/animated-pet-design`. The details below record the design; actual status
+and verification limits are listed next.
+
+### Implemented status
+
+- `ui/pet_widget.py` extends CompanionWidget, retaining click-through, Windows
+  transparency and waveform drawing. It renders cached 32x32 sprites at 2x scale
+  with the existing triangle as an asset-load fallback.
+- `pets.py` provides catalog, elapsed-time player and behavior controller.
+  Profiles are data; current cursor destination updates throughout hops, without
+  a queue or added vertical arc. Jump speed scales both behavior and frame clocks.
+- `pet_config.py` validates [pet] preferences. Tray > Pet changes species and
+  persists only that setting, preserving comments and unrelated configuration.
+  Switching preserves streaming, speaking and the pointing lifecycle.
+- First text delta and actual TTS playback are distinct inputs. Cancellation
+  cancels pending synthesis; stale coroutine completion cannot reset a newer turn.
+- Pointing displays an arrival ring, holds 800 ms and resumes following independent
+  of speech. The marker is not visible during most travel. Security warning is an
+  injectable event only; automatic detection is not included.
+- Jump height is reserved for future external-arc clips; no effect on supplied
+  artwork. Cat sleep/speaking and other gestures remain expressive fallbacks.
+- All 138 tests pass with Python 3.13.5/PySide6 6.8.3 in this host's test venv.
+  The declared project requirement remains Python 3.12. Changed-file lint passes.
+  See pet-review/implemented-preview.png for 24 inspected actual Qt render states.
+  Physical click-through, mixed-DPI pointing, audio timing, display hot-unplug and
+  frozen executable startup still require manual verification.
+
+### Scope and approach
+
+Replace the triangle with one selectable pet while preserving the waveform,
+click-through overlay, screenshot hiding, cursor following, pointing, interruption,
+and backend contracts. Keep Qt Widgets and qasync. Alternatives considered were
+embedding playback and behavior directly in CompanionWidget (smaller initial edit,
+more coupled logic) or separating playback and behavior (recommended). A new
+rendering framework would duplicate working window and platform integration.
+
+CompanionWidget retains window ownership and painting. Add a validated sprite
+catalog, a frame player, and a behavior/movement controller. The catalog describes
+asset paths, explicit frames, per-frame durations, loop/one-shot policy, facing,
+anchors, jump phases and displacement policy. The player advances frames; it
+never moves windows. The controller chooses actions and owns ground position,
+destination and optional jump displacement. Behavior profiles are data; there
+must be no species-specific behavior branches. Asset-specific clip assignments
+belong in the catalog.
+
+No new runtime dependency is needed. Use cached QPixmap frames and integer-scale
+nearest-neighbor drawing. Retain a fixed cell origin rather than tightly cropping
+each frame. Ship sheets and metadata inside the existing package and include them
+in wheel/PyInstaller data. Root source sheets remain untouched.
+
+### Sprite inspection and assignments
+
+All sheets have alpha transparency and a 32x32 grid. Coordinates below are
+one-based row and column numbers. The labeled sheets and interactive player are
+in [pet-review/index.html](pet-review/index.html); their proposed mapping data is
+in [pet-review/proposed-mappings.json](pet-review/proposed-mappings.json).
+These are review artifacts, not a runtime catalog. Visual inspection establishes
+the poses and occupied cells; action names and timing are proposed interpretations
+because no artist labels or frame timing were supplied.
+
+| Action | Fox | Cat | Red Panda | Ferret |
+|---|---|---|---|---|
+| Idle | R1 C1-5 | R1 C1-4 | R1 C1-6 | R1 C1-8 |
+| Walk | R3 C1-8 | R5 C1-8 | R3 C1-8 | R3 C1-8 |
+| Run | walk, faster | R6 C1-8 | walk, faster | R4 C1-8 |
+| Jump | R4 C1-11 | R9 C1-7 | R4 C1-8 | R6 C1-8 |
+| Attentive | R2 C1-5 | R2 C1-4 | R2 C1-6 | R2 C1-8 |
+| Thinking | idle, slower | R4 C1-4 | idle, slower | idle, slower |
+| Text responding | R2 C6-9 | R2 C1-4 | R2 C1-6 | R2 C1-8 |
+| Speaking | text responding | R3 C1-4 | text responding | text responding |
+| Error / concerned | R5 C1-5 | R8 C1-6 | R5 C1-5 | attentive, once |
+| Settle | R7 C1-7 | sleep directly | R6 C1-8 | R9 C1-8 |
+| Sleep / rest | R6 C1-6 | R7 C1-4 | R7 C1-8 | R8 C1-8 |
+| Wake | reversed settle | R9 C1-7 | reversed settle | reversed settle |
+
+Fallback assignments communicate state through existing gestures; they are not
+lip synchronization or dedicated thinking/security animations. Cat R3 is a
+grooming gesture used as an expressive speaking fallback. Cat R7 is a low resting
+pose, not a confirmed closed-eye sleeping cycle. Ferret has no convincing neutral
+standing loop separate from its tail/stance cycles; use the calmer R1 cycle and
+hold C1 if its movement feels too busy. Reverse-settle wake clips are proposals
+for reuse, not additional source animations. Idle variations choose attentive,
+reaction or settle/wake gestures only when their meaning fits a quiet idle.
+
+#### Jump inspection
+
+| Pet | Takeoff | Airborne / extension | Landing and recovery | Proposed frame durations |
+|---|---|---|---|---|
+| Fox | R4 C1-3, low preparation | C4-6, elevated/extended | C7-10, crouch; C11 grounded | 90,80,70,70,80,70,70,80,80,90,100 ms |
+| Cat | R9 C1-2, upright launch | C3-4, extended body | C5-7, low recovery | 100,90,100,100,90,100,120 ms |
+| Red Panda | R4 C1-2, rising | C3-4, upright extension | C5-6, low landing; C7-8 grounded | 100,90,100,90,80,90,100,110 ms |
+| Ferret | R6 C1-2, rearing launch | C3-5, rotating/extended | C6, low impact; C7-8 standing | 90,80,90,90,80,90,100,110 ms |
+
+These phase labels and jump identities are visually inferred candidates pending
+animated review, not confirmed artist assignments. Changing vertical body extent
+does not prove a complete ground-relative jump arc. Approve a candidate only if
+playback shows recognizable takeoff, an airborne interval and grounded landing;
+otherwise disable it or revise the mapping. Cat R9 also
+changes from sitting to standing: show the complete sequence rather than assuming
+a seamless running loop. Ferret R5 shrinks/disappears downward and R7 emerges;
+exclude both from ordinary jumps. R6 is the complete acrobatic candidate.
+
+All four candidates already move body pixels vertically within their cells.
+Default additional arc height is therefore zero for all four. Never recenter each
+frame, which would erase the drawn motion. A future catalog may enable a modest
+external arc after visual verification. Height settings affect only clips allowing
+external displacement; they cannot amplify baked motion. Playback speed scales
+the entire jump, including controller phases, using the same elapsed action clock.
+The player offers adjustable timing for review; it does not claim artist timing.
+
+### State and event integration
+
+Keep VoiceState as the existing orchestration state. Add presentation events rather
+than adding sleeping, jumping or speaking to that enum. Manager adapters carry a
+turn generation ID so cancelled/old text, TTS, and pointing callbacks cannot
+change the new turn. Text responding begins on the first nonempty response delta,
+not on entry into the current RESPONDING state, which precedes streaming.
+
+| Trigger | Behavior |
+|---|---|
+| LISTENING | Cancel optional play, wake immediately, attentive clip and existing microphone waveform. |
+| PROCESSING | Thinking/wait fallback, no optional jumps. |
+| First text delta | Responding fallback; speaking remains false. |
+| TTS starts | Speaking fallback independently of text; preserve output waveform. |
+| TTS finishes | Clear speaking; resume current turn/pointing state, or idle if complete. |
+| POINT parsed | Set explicit target, use walk/run with precise target marker; no optional hops during important pointing. |
+| Target arrival | Hold marker briefly (proposed 800 ms), then return toward the latest cursor destination, independent of TTS duration. |
+| Cancellation | Clear turn effects, pointing and pending play; return to current listening state or cursor following. |
+| Error | Brief reaction (at most 800 ms), then recompute current state rather than blindly setting idle. |
+| Security warning | Concerned fallback, with priority over optional play and normal presentation. |
+| Extended inactivity | Settle/rest only outside active interactions. |
+| Cursor movement / push-to-talk returns | Wake if available, immediately resume following/attentiveness; wake never delays interaction. |
+
+Both TTS clients already expose playback_started/playback_finished, but app.py
+does not connect them to the companion. Their start semantics need tightening:
+cloud currently emits after play() rather than actual PlayingState; system TTS
+also treats Synthesizing as started. Normalize actual playback onset for this
+feature and explicitly clear speaking on stop, error and cancellation, since
+normal-finish signals do not cover every exit. Add generation guards at the
+adapter/task boundary, not merely by reading the latest ID when a stale callback
+arrives.
+
+No security-warning producer exists in the current app. Provide a typed event
+input and verify it with an injected event; detection/policy is out of scope and
+must not be inferred from arbitrary LLM text. A visible concerned gesture is a
+presentation response, not a security detector.
+
+### Movement, arbitration and jumping
+
+Use one Qt update timer and monotonic elapsed time. Movement updates the latest
+cursor destination every tick, including while jumping; there is no destination
+queue or jump queue. Ground position uses time-based exponential smoothing
+(proposed 90 ms response constant), with faster convergence for large separation.
+Short travel walks; run may activate beyond 180 logical pixels. Facing follows
+horizontal movement with a small dead zone. Stationary means speed below 5 logical
+pixels/second for 250 ms; hysteresis prevents walk/idle flicker.
+
+Traversal hops require at least 120 logical pixels of remaining travel, a cooldown,
+and a profile-weighted random decision evaluated once per traversal opportunity,
+not every paint. They never reduce follow convergence or freeze the destination.
+If separation exceeds 240 logical pixels, prioritize catch-up and forbid new hops.
+Completing a hop cannot enqueue a second one. Idle play starts only after 5 seconds
+stationary; resample the next eligible interval after an action completes. Do not
+replay the same optional action consecutively when alternatives exist.
+
+Optional actions finish before returning to idle, but listening, warnings, errors
+and cancellation can preempt them. On preemption remove optional displacement
+without moving the ground anchor, and select the new grounded clip immediately.
+Priority: cancellation/new listening and security warning, error, explicit target
+movement, active AI presentation, wake, optional traversal jump, idle play, sleep.
+Keep locomotion and interaction as separate inputs: walking to POINT can coexist
+with speaking=true and waveform display; render locomotion while moving and
+speaking at arrival. A warning gesture can coexist with cursor following.
+
+For an enabled external arc use a bounded normalized trajectory, for example
+4*h*u*(1-u), zero at launch and landing. Ground destination and arc offset are
+independent. Reserve the entire sprite cell and maximum arc when clamping against
+each screen's available geometry, including negative coordinates. Re-clamp on
+display removal or DPI change. Screens are separate rectangles, not one enclosing
+rectangle with usable gaps. Across separated displays, transfer directly between
+valid screen positions rather than animating through inaccessible space. Preserve
+the existing screenshot-to-Qt coordinate path; manually verify mixed-DPI pointing
+before claiming it works. Pet anchor changes must not alter POINT coordinates.
+
+### Profiles and configuration
+
+Proposed defaults below are editable profile data, not species logic. Intervals
+are seconds; hop probability is per eligible traversal opportunity.
+
+| Default profile | Idle play interval | Hop probability | Jump cooldown |
+|---|---|---|---|
+| Fox / playful | 18-35 | 0.18 | 10 |
+| Cat / reserved | 35-65 | 0.08 | 18 |
+| Red Panda / relaxed | 28-50 | 0.12 | 14 |
+| Ferret / energetic | 12-25 | 0.25 | 8 |
+
+Initial configuration adds [pet] with species, profile, reduced_motion,
+playful_idle, jump_frequency multiplier (0 disables), jump_height,
+jump_speed multiplier, and sleep_after_seconds (default 120). Keep Settings as
+the existing config-file entry; no new settings panel. Validate finite values,
+nonnegative height/frequency and bounded playback speed; document units and limits
+when implementing. Profiles can be chosen independently of species. Configuration
+missing [pet] uses Fox/playful. Invalid assets fall back to the existing triangle
+and a log message, without breaking voice interaction. Missing optional clips
+fall back to attentive/idle; missing jump means no autonomous jump.
+
+Reduced motion disables optional jumps, bobbing/pulses and random animated play;
+use static state poses plus retained audio waveforms. Cursor tracking remains
+responsive and target travel uses direct placement rather than decorative flight.
+Inactivity is measured from cursor movement and interaction events, not arbitrary
+keyboard logging. User return is cursor movement or push-to-talk.
+
+### Acceptance and implementation boundaries
+
+The mappings were approved before production work. Verify every frame rectangle and nonempty alpha, including reversed
+sequences, and visually check complete takeoff/airborne/landing loops. If a
+candidate is unsuitable, disable it and use walk/idle, rather than invent frames.
+
+Implementation milestones, each followed by targeted updates to PROGRESS.md:
+
+1. Catalog/player: validated bounds and timing, fallback handling, stable anchors,
+   all four approved clips, wheel/frozen resource loading.
+2. Controller: deterministic clock/RNG tests for probability, cooldown, no repeat,
+   action completion, sleep/wake and configurable profiles. During a hop, moving
+   the cursor must update destination on the next tick; no queued actions, no
+   extra horizontal lag versus ordinary following, and zero added arc for these
+   sheets. Verify reduced motion and optional missing clips.
+3. Integration: first text delta versus actual TTS onset, normal finish, stop,
+   errors, stale callbacks after cancellation, injected warning, POINT arrival
+   and independent return. Preserve microphone/output waveforms and screenshot
+   hide/restore. Mock backend events; no model server needed for these checks.
+4. Windows review: click-through/no focus theft, all four pets, monitor edges,
+   negative origins, display gaps, hot-unplug and mixed DPI; inspect jump feet and
+   landing at normal scale. Verify no off-screen frames or ghost overlay captures.
+   Run existing tests and lint with the documented Python 3.12/uv environment.
+
+The initial environment passed 53 dependency-independent tests. After installing
+dependencies, all 138 tests pass, including offscreen Qt and lifecycle tests. Physical desktop acceptance remains manual. RUNNING.md documents actual asset/config behavior. Its incorrect Kokoro/tts_engine mention has been removed.

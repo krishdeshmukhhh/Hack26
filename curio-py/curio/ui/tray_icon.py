@@ -9,10 +9,11 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import QSettings, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from curio.icon_factory import icon_for_state
+from curio.pet_config import SPECIES
 from curio.state import VoiceState
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class TrayIcon(QSystemTrayIcon):
     # "Show Curio" toggled. Off hides the cursor except during an interaction,
     # like the macOS menu bar toggle. Persisted across launches.
     show_cursor_toggled = Signal(bool)
+    pet_selected = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -50,6 +52,22 @@ class TrayIcon(QSystemTrayIcon):
         history_action.triggered.connect(lambda: self.show_history_requested.emit())
         menu.addAction(history_action)
 
+        pet_menu = menu.addMenu("Pet")
+        self._pet_group = QActionGroup(self)
+        self._pet_group.setExclusive(True)
+        self._pet_actions: dict[str, QAction] = {}
+        for species, label in SPECIES.items():
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setData(species)
+            self._pet_group.addAction(action)
+            pet_menu.addAction(action)
+            self._pet_actions[species] = action
+        self._pet_group.triggered.connect(
+            lambda action: self.pet_selected.emit(action.data())
+        )
+        self.set_selected_pet("fox")
+
         menu.addSeparator()
 
         quit_action = QAction("Quit", menu)
@@ -65,6 +83,11 @@ class TrayIcon(QSystemTrayIcon):
     def _on_show_cursor_toggled(self, checked: bool) -> None:
         self._settings.setValue("show_cursor", checked)
         self.show_cursor_toggled.emit(checked)
+
+    def set_selected_pet(self, species: str) -> None:
+        """Synchronize the menu after loading or persisting a selection."""
+        if species in self._pet_actions:
+            self._pet_actions[species].setChecked(True)
 
     def _on_quit(self) -> None:
         app = QApplication.instance()

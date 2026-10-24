@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import shutil
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from curio.pet_config import PetSettings
 
 PLACEHOLDER_WORKER_URL = "https://curio-proxy.your-subdomain.workers.dev"
 
@@ -104,6 +106,7 @@ class Config:
     knowledge_dir: Path | None
     backend: str = "cloud"
     local: LocalConfig | None = None
+    pet: PetSettings = field(default_factory=PetSettings)
 
     @property
     def point_coords(self) -> str:
@@ -172,6 +175,11 @@ class Config:
         if not knowledge_dir.is_dir():
             knowledge_dir = None
 
+        try:
+            pet = PetSettings.from_dict(data.get("pet", {}))
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+
         return cls(
             worker_url=worker_url if isinstance(worker_url, str) else "",
             hotkey=hotkey,
@@ -180,6 +188,7 @@ class Config:
             knowledge_dir=knowledge_dir,
             backend=backend,
             local=local,
+            pet=pet,
         )
 
     @staticmethod

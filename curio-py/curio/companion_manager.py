@@ -92,6 +92,8 @@ class CompanionManager(QObject):
     # walkthrough step / total (0, 0 outside a walkthrough).
     response_annotated = Signal(str, int, int)
     walkthrough_ended = Signal()
+    speaking_changed = Signal(bool)
+    security_warning = Signal(str)
 
     def __init__(
         self,
@@ -126,6 +128,7 @@ class CompanionManager(QObject):
         self._cancel_flag: bool = False
         self._current_screenshots: list[ScreenshotImage] = []
         self._speak_task: asyncio.Task[None] | None = None
+        self._generation = 0
 
         # Guided walkthrough: the step the user is currently doing, if any.
         self._walkthrough: StepTag | None = None
@@ -222,6 +225,9 @@ class CompanionManager(QObject):
     def _on_hotkey_pressed(self) -> None:
         logger.debug("hotkey pressed (state=%s)", self._state)
 
+        self._generation += 1
+        self.speaking_changed.emit(False)
+
         # A new question ends any walkthrough in progress.
         self._end_walkthrough()
         self._stop_speaking()
@@ -252,6 +258,14 @@ class CompanionManager(QObject):
 
     def _on_hotkey_cancelled(self) -> None:
         logger.debug("hotkey cancelled")
+        self._generation += 1
+        self._cancel_flag = True
+        self._tts.stop()
+        self.speaking_changed.emit(False)
+        if self._speak_task is not None and not self._speak_task.done():
+            self._speak_task.cancel()
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
         self._mic.stop()
         self._stop_pcm_bridge()
         asyncio.ensure_future(self._transcription.stop_stream())
@@ -278,13 +292,19 @@ class CompanionManager(QObject):
         # press between task assignment and coroutine start cannot
         # have its cancellation silently undone.
         self._cancel_flag = False
-        self._current_task = asyncio.ensure_future(self._run_turn(text))
+        self._current_task = asyncio.ensure_future(self._run_turn(text, self._generation))
 
     # ------------------------------------------------------------------
     # LLM delta relay (only when not cancelled)
     # ------------------------------------------------------------------
 
     def _on_llm_delta(self, text: str) -> None:
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        if task is not None and task is not self._current_task:
+            return
         if not self._cancel_flag:
             self.response_delta.emit(text)
 
@@ -293,8 +313,19 @@ class CompanionManager(QObject):
     # ------------------------------------------------------------------
 
     def _on_error(self, msg: str) -> None:
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        sender = self.sender()
+        if sender in (self._llm, self._tts):
+            if self._state != VoiceState.RESPONDING:
+                return
+            if task is not None and task not in (self._current_task, self._speak_task):
+                return
         logger.error("companion error: %s", msg)
         self._end_walkthrough()
+        self.speaking_changed.emit(False)
         self.error.emit(msg)
         self._set_state(VoiceState.IDLE)
 
@@ -369,19 +400,39 @@ class CompanionManager(QObject):
     # TTS playback (async, fire-and-forget)
     # ------------------------------------------------------------------
 
-    async def _speak(self, text: str) -> None:
+    async def _speak(self, text: str, generation: int | None = None) -> None:
         """Speak text via TTS. State stays RESPONDING during playback."""
+        generation = self._generation if generation is None else generation
+        if generation != self._generation:
+            return
+
+        def started():
+            if generation == self._generation and self._state == VoiceState.RESPONDING:
+                self.speaking_changed.emit(True)
+
+        def finished():
+            if generation == self._generation:
+                self.speaking_changed.emit(False)
+
+        self._tts.playback_started.connect(started)
+        self._tts.playback_finished.connect(finished)
         try:
             await self._tts.speak(text)
         except asyncio.CancelledError:
             logger.debug("TTS cancelled")
         except Exception as exc:  # noqa: BLE001
             logger.error("TTS error: %s", exc)
-            self.error.emit(str(exc))
+            if generation == self._generation:
+                self.error.emit(str(exc))
         finally:
-            # Only leave RESPONDING if we're still in it (a new hotkey
-            # press or a walkthrough click may have already moved on).
-            if self._state == VoiceState.RESPONDING:
+            self._tts.playback_started.disconnect(started)
+            self._tts.playback_finished.disconnect(finished)
+            if generation == self._generation:
+                self.speaking_changed.emit(False)
+            # Only leave RESPONDING if this is still the current turn and we're
+            # still in it (a new hotkey press or walkthrough click may have
+            # already moved on).
+            if generation == self._generation and self._state == VoiceState.RESPONDING:
                 waiting = self._walkthrough is not None
                 self._set_state(VoiceState.GUIDING if waiting else VoiceState.IDLE)
 
@@ -389,12 +440,15 @@ class CompanionManager(QObject):
     # Turn pipeline (async)
     # ------------------------------------------------------------------
 
-    async def _run_turn(self, text: str, *, continuing_step: int | None = None) -> None:
+    async def _run_turn(
+        self, text: str, generation: int | None = None, *, continuing_step: int | None = None
+    ) -> None:
         """Execute the full turn: screen capture → LLM request → history.
 
         This coroutine becomes ``_current_task`` and supports cancellation
         via ``_cancel_flag`` (cooperative) and ``task.cancel()`` (hard).
         """
+        generation = self._generation if generation is None else generation
         try:
             # Yield control so stop_stream (which is still draining after
             # the recv loop emitted final_transcript synchronously) can
@@ -402,6 +456,8 @@ class CompanionManager(QObject):
             # (hide_for_capture calls processEvents, which would re-enter
             # the stop_stream task and trigger a RuntimeError).
             await asyncio.sleep(0)
+            if generation != self._generation:
+                return
 
             # Emit the final transcript so the UI can display it.
             self.final_transcript.emit(text)
@@ -464,6 +520,9 @@ class CompanionManager(QObject):
                 kb_content, app_name, point_coords=self._config.point_coords
             )
 
+            if generation != self._generation:
+                return
+
             # Stay in PROCESSING (spinner) while the model answers, as the
             # macOS app does; RESPONDING starts when there's something to say.
             full_text = await self._llm.send(
@@ -473,7 +532,7 @@ class CompanionManager(QObject):
             )
 
             # Only commit to history and emit completion if not cancelled.
-            if not self._cancel_flag:
+            if not self._cancel_flag and generation == self._generation:
                 self.response_complete.emit(full_text)
                 self.success_turn_completed.emit()
 
@@ -507,16 +566,18 @@ class CompanionManager(QObject):
                             coords[0], coords[1], point_tag.label,
                         )
 
-                self._speak_task = asyncio.ensure_future(self._speak(spoken_text))
+                self._speak_task = asyncio.ensure_future(self._speak(spoken_text, generation))
 
         except asyncio.CancelledError:
             logger.debug("turn cancelled")
-            self._set_state(VoiceState.IDLE)
+            if generation == self._generation:
+                self._set_state(VoiceState.IDLE)
 
         except Exception as exc:  # noqa: BLE001
             logger.error("turn pipeline error: %s", exc)
-            self.error.emit(str(exc))
-            self._set_state(VoiceState.IDLE)
+            if generation == self._generation:
+                self.error.emit(str(exc))
+                self._set_state(VoiceState.IDLE)
 
         # On success, stay in RESPONDING so the response text remains
         # visible until the next hotkey press resets to LISTENING.
