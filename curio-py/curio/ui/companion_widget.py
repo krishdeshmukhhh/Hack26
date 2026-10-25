@@ -19,7 +19,7 @@ import logging
 import math
 from enum import Enum, auto
 
-from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, QVariantAnimation
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -50,7 +50,7 @@ from curio.ui.pointer_bubble import (
     step_caption,
 )
 from curio.ui.target_ring import TargetRingOverlay
-from curio.ui.window_effects import make_overlay_window
+from curio.ui.window_effects import make_overlay_window, raise_without_activating
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,9 @@ class _Mode(Enum):
 
 class CompanionWidget(QWidget):
     """The blue buddy that follows the cursor and points at things."""
+
+    # Landed on a fly_to target (after the flight); the spotlight shows then.
+    pointer_arrived = Signal()
 
     CANVAS = 72                # square window; the buddy is drawn at its centre
     TRIANGLE_SIZE = 22         # was 18; bigger reads better in 1080p recordings
@@ -225,6 +228,11 @@ class CompanionWidget(QWidget):
         self.bubble.close()
         super().closeEvent(event)
 
+    def raise_overlays(self) -> None:
+        """Bring the buddy and its pill above other topmost overlays, without focus."""
+        raise_without_activating(self.bubble)
+        raise_without_activating(self)
+
     def set_cursor_enabled(self, enabled: bool) -> None:
         """Tray toggle. Off: hidden except during an interaction."""
         self._cursor_enabled = enabled
@@ -327,6 +335,7 @@ class CompanionWidget(QWidget):
         self._mode = _Mode.POINTING
         self._rotation = REST_ROTATION_DEGREES
         self.bubble.show_text(self._caption, self._bubble_anchor(), on_typed=self._pointer_typed)
+        self.pointer_arrived.emit()
 
     def _pointer_typed(self) -> None:
         if self._mode != _Mode.POINTING or self._hold:

@@ -39,6 +39,7 @@ from curio.focus_capture import focus_screenshots
 from curio.focus_selection import FocusRegion, FocusSelectionController
 from curio.hands_free import strip_finish_command
 from curio.hotkey import HotkeyMonitor
+from curio.key_finish_watcher import KeyFinishWatcher
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
 from curio.learning_contract import AssistanceLevel, StepOutcome, app_key, task_key
 from curio.learning_events import (
@@ -94,6 +95,18 @@ class CaptureVisibilityController(Protocol):
         ...
 
 
+class SpotlightHost(Protocol):
+    """Protocol for the point-target spotlight (see ``curio.ui.spotlight``)."""
+
+    def point_started(self, x: int, y: int, *, hold: bool = False) -> None: ...
+
+    def hide(self) -> None: ...
+
+    def hide_for_capture(self) -> None: ...
+
+    def restore_after_capture(self) -> None: ...
+
+
 class CompanionManager(QObject):
     """Orchestration state machine for the voice companion pipeline.
 
@@ -129,13 +142,17 @@ class CompanionManager(QObject):
         screen_capture_fn: Callable[[], list[ScreenshotImage]],
         panel_visibility_controller: CaptureVisibilityController,
         click_watcher: ClickWatcher | None = None,
+        key_watcher: KeyFinishWatcher | None = None,
         parent: QObject | None = None,
         *,
         memory: ConversationMemory | None = None,
         learning: LearningServices | None = None,
+        spotlight: SpotlightHost | None = None,
     ) -> None:
         super().__init__(parent)
 
+        # Dims the screen around the point target; None when [ui] spotlight = false.
+        self._spotlight = spotlight
         self._memory = memory
         # Walkthrough learning: None when [learning] enabled = false.
         self._learning = learning
@@ -177,6 +194,12 @@ class CompanionManager(QObject):
         self._walkthrough: StepTag | None = None
         self._click_watcher = click_watcher or ClickWatcher(self)
         self._click_watcher.clicked.connect(self._on_walkthrough_click)
+        # Typing steps finish from the keyboard; taps the hotkey's existing hook.
+        if key_watcher is None and hasattr(hotkey, "typing_enter"):
+            key_watcher = KeyFinishWatcher(hotkey, self)
+        self._key_watcher = key_watcher
+        if self._key_watcher is not None:
+            self._key_watcher.finished.connect(self._on_walkthrough_click)
         self._walkthrough_timeout = QTimer(self)
         self._walkthrough_timeout.setSingleShot(True)
         self._walkthrough_timeout.setInterval(WALKTHROUGH_TIMEOUT_MS)
@@ -238,6 +261,8 @@ class CompanionManager(QObject):
         # Serialize ALL screenshot paths so one cannot restore another's overlays.
         async with self._capture_lock:
             controllers = [self._panel_visibility_controller]
+            if self._spotlight is not None:
+                controllers.append(self._spotlight)
             if self._focus_selection is not None:
                 controllers.append(self._focus_selection)
             hidden = []
@@ -273,6 +298,9 @@ class CompanionManager(QObject):
         self._cancel_flag = True
         self._selection_cancelled = True
         self._click_watcher.stop()
+        if self._key_watcher is not None:
+            self._key_watcher.stop()
+        self._hide_spotlight()
         self._walkthrough_timeout.stop()
         self._mic.stop()
         self._stop_pcm_bridge()
@@ -405,7 +433,10 @@ class CompanionManager(QObject):
         # Pause until a transcript confirms this is a question. Ctrl+Alt may
         # instead become a selection gesture; that must retain the current step.
         self._click_watcher.stop()
+        if self._key_watcher is not None:
+            self._key_watcher.stop()
         self._walkthrough_timeout.stop()
+        self._hide_spotlight()
         self._stop_speaking()
 
         # Interrupt any in-flight turn OR lingering stream task.
@@ -457,6 +488,7 @@ class CompanionManager(QObject):
         self._generation += 1
         if self._coaching is not None:
             self._coaching.interrupt()
+        self._hide_spotlight()
         if not preserve_walkthrough:
             self._end_walkthrough()
         self._cancel_flag = True
@@ -479,6 +511,8 @@ class CompanionManager(QObject):
         # emit a final_transcript if the session never fully started.
         if preserve_walkthrough and self._walkthrough is not None:
             self._click_watcher.start()
+            if self._key_watcher is not None:
+                self._key_watcher.start()
             self._walkthrough_timeout.start()
             self._set_state(VoiceState.GUIDING)
         else:
@@ -601,6 +635,10 @@ class CompanionManager(QObject):
         logger.info("turn timings: %s total=%.2fs", " ".join(parts), time.monotonic() - start)
         self._marks = {}
 
+    def _hide_spotlight(self) -> None:
+        if self._spotlight is not None:
+            self._spotlight.hide()
+
     def _stop_speaking(self) -> None:
         self._speech = None
         self._tts.stop()
@@ -618,6 +656,8 @@ class CompanionManager(QObject):
         if step is not None:
             self._walkthrough = step
             self._click_watcher.start()
+            if self._key_watcher is not None:
+                self._key_watcher.start()
             self._walkthrough_timeout.start()
             logger.info(
                 "walkthrough: waiting on step %d (model estimate: %d)", step.index, step.total
@@ -632,10 +672,13 @@ class CompanionManager(QObject):
     ) -> None:
         """Stop waiting for clicks. ``outcome`` settles the step being recorded;
         the default covers Esc, a new push-to-talk question and errors."""
+        self._hide_spotlight()
         self._finish_recording(outcome, completed=completed)
         was_active = self._walkthrough is not None
         self._walkthrough = None
         self._click_watcher.stop()
+        if self._key_watcher is not None:
+            self._key_watcher.stop()
         self._walkthrough_timeout.stop()
         if was_active:
             logger.info("walkthrough ended")
@@ -648,8 +691,11 @@ class CompanionManager(QObject):
         if step is None or self._state not in (VoiceState.RESPONDING, VoiceState.GUIDING):
             return
         logger.info("walkthrough: step %d done, fetching the next one", step.index)
+        self._hide_spotlight()
         # One click per step; the next answer re-arms the watcher.
         self._click_watcher.stop()
+        if self._key_watcher is not None:
+            self._key_watcher.stop()
         self._walkthrough_timeout.stop()
         self._stop_speaking()
         self._set_state(VoiceState.PROCESSING)
@@ -668,6 +714,7 @@ class CompanionManager(QObject):
         if self._coaching is not None and self._coaching.mode != CoachingMode.ASSISTANT:
             self._coaching.stop_session()
             return
+        self._hide_spotlight()
         if self._walkthrough is None and self._state != VoiceState.GUIDING:
             return
         self._stop_speaking()
@@ -867,6 +914,7 @@ class CompanionManager(QObject):
                 # The async sleep lets qasync process the Qt opacity change
                 # AND lets pending asyncio tasks (stop_stream cleanup) settle
                 # — avoids re-entrancy that processEvents() would cause.
+                self._hide_spotlight()
                 screenshots = await self._capture_screenshots(focus_region)
                 if generation != self._generation or self._cancel_flag:
                     return
@@ -1001,11 +1049,17 @@ class CompanionManager(QObject):
                         window_title=window_title, task=task_key(text),
                     )
                 self._update_walkthrough(step)
+                # POINT:none (or an unmappable point) means no spotlight.
+                self._hide_spotlight()
                 if point_tag is not None:
                     coords = map_point_to_screen(
                         point_tag, screenshots, self._config.point_coords
                     )
                     if coords is not None:
+                        if self._spotlight is not None:
+                            self._spotlight.point_started(
+                                coords[0], coords[1], hold=step is not None
+                            )
                         self._panel_visibility_controller.fly_to(
                             coords[0],
                             coords[1],

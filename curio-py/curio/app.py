@@ -54,6 +54,7 @@ from curio.ui.coaching_window import CoachingWindow
 from curio.ui.history_window import HistoryWindow
 from curio.ui.memory_window import MemoryWindow
 from curio.ui.pet_widget import PetCompanionWidget
+from curio.ui.spotlight import SpotlightController
 from curio.ui.tray_icon import TrayIcon
 
 APP_NAME = "Curio"
@@ -212,12 +213,15 @@ def run() -> int:
         hotkey_monitor.suppress_for_selection, Qt.ConnectionType.DirectConnection
     )
     shutting_down = False
+    spotlight = None
 
     def stop_input() -> None:
         nonlocal shutting_down
         shutting_down = True
         focus_selection.stop()
         hotkey_monitor.stop()
+        if spotlight is not None:
+            spotlight.hide_now()
         companion.close()
 
     # ------------------------------------------------------------------
@@ -282,6 +286,10 @@ def run() -> int:
             tray_icon.open_stuck_map_requested.connect(
                 lambda: QDesktopServices.openUrl(QUrl(f"{sync_url}/"))
             )
+        # Dims around the point target; draws nothing when [ui] spotlight = false.
+        spotlight = SpotlightController(result.config.ui)
+        spotlight.raise_above = companion.raise_overlays
+        companion.pointer_arrived.connect(spotlight.arrived)
         manager = CompanionManager(
             config=result.config,
             mic=mic,
@@ -293,6 +301,7 @@ def run() -> int:
             panel_visibility_controller=companion,
             memory=memory_runtime.conversation,
             learning=learning,
+            spotlight=spotlight,
         )
         manager.attach_focus_selection(focus_selection)
         hotkey_monitor.selection_cancelled.connect(manager.cancel_for_selection)

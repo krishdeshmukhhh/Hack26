@@ -85,3 +85,11 @@ enabled = true
 share_walkthroughs = false
 # Map server that shared paths are pushed to and pulled from. Empty = no sync.
 sync_url = ""
+
+# On-screen visuals.
+[ui]
+# When Curio points at something, dim the rest of that monitor and pulse a
+# ring around the target. Click-through, and hidden while screenshots are taken for
+# the model (screen recordings still show it).
+spotlight = true
+spotlight_dim = 0.35            # 0-0.8; how dark the rest of the screen gets (0 = ring only)

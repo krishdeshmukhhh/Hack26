@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import threading
+from ctypes import wintypes
 from enum import Enum, auto
 
 from pynput import keyboard
@@ -23,6 +25,47 @@ except AttributeError:  # not Windows
 # Virtual-key codes to ask Windows about for the merged modifier names.
 _VK_SHIFT = 0x10
 _VK_MENU = 0x12  # either Alt
+
+_SAFE_KEY_NAMES = frozenset({"ctrl_l", "ctrl_r", "alt", "shift", "win", "esc"})
+
+# Private user32 handle (not the shared ctypes.windll), resolved lazily.
+_fg_api: tuple | None = None
+_fg_api_failed = False
+
+
+def _loggable(name: str) -> str:
+    """Key id safe for logs: modifiers/specials by name, printable keys redacted."""
+    return name if name in _SAFE_KEY_NAMES or name.startswith("Key.") else "<key>"
+
+
+def _foreground_is_own_process() -> bool:
+    """True if the foreground window belongs to this process. Fails open (False)."""
+    global _fg_api, _fg_api_failed
+    try:
+        if _fg_api is None:
+            if _fg_api_failed:
+                return False
+            try:
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                get_fg = user32.GetForegroundWindow
+                get_fg.argtypes = []
+                get_fg.restype = wintypes.HWND
+                get_pid = user32.GetWindowThreadProcessId
+                get_pid.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+                get_pid.restype = wintypes.DWORD
+                _fg_api = (get_fg, get_pid)
+            except (AttributeError, OSError):  # not Windows
+                _fg_api_failed = True
+                return False
+        get_fg, get_pid = _fg_api
+        hwnd = get_fg()
+        if not hwnd:
+            return False
+        pid = wintypes.DWORD(0)
+        get_pid(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except Exception:
+        return False
 
 
 class _HotkeyState(Enum):
@@ -119,6 +162,10 @@ class HotkeyMonitor(QObject):
     escape_pressed = Signal()
     selection_cancelled = Signal()
     _input_event = Signal(object)
+    # Typing taps for walkthrough steps; carry no key identity. Only emitted
+    # while ``typing_tap_enabled`` is set (a step is waiting).
+    typing_enter = Signal()
+    typing_printable = Signal()
 
     _VALID_BINDINGS: frozenset[str] = frozenset({"ctrl+alt", "right_ctrl"})
 
@@ -139,6 +186,7 @@ class HotkeyMonitor(QObject):
         self._suppressed_chords: set[int] = set()
         self._lifecycle = 0
         self._input_event.connect(self._deliver_input, Qt.ConnectionType.QueuedConnection)
+        self.typing_tap_enabled = False
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -215,7 +263,15 @@ class HotkeyMonitor(QObject):
         vk = _key_vk(name, key)
         if vk is not None:
             self._held_vks[name] = vk
-        logger.debug("key down %s (state=%s, held=%s)", name, self._state.name, sorted(self._held))
+        logger.debug(
+            "key down %s (state=%s, held=%s)",
+            _loggable(name),
+            self._state.name,
+            sorted(_loggable(n) for n in self._held),
+        )
+
+        if self.typing_tap_enabled:
+            self._tap_typing(key, name)
 
         if self._state == _HotkeyState.UNARMED:
             self._prune_released_keys(keep=name)
@@ -250,7 +306,12 @@ class HotkeyMonitor(QObject):
             return
         self._held.discard(name)
         self._held_vks.pop(name, None)
-        logger.debug("key up %s (state=%s, held=%s)", name, self._state.name, sorted(self._held))
+        logger.debug(
+            "key up %s (state=%s, held=%s)",
+            _loggable(name),
+            self._state.name,
+            sorted(_loggable(n) for n in self._held),
+        )
 
         if self._state == _HotkeyState.ARMED:
             # Releasing any of the required modifiers ends the press.
@@ -269,6 +330,31 @@ class HotkeyMonitor(QObject):
                 self._state = _HotkeyState.UNARMED
             return
 
+    def _tap_typing(self, key: keyboard.Key | keyboard.KeyCode | None, name: str) -> None:
+        """Report typing activity for walkthrough steps (see key_finish_watcher).
+
+        Privacy: only a coarse kind ("enter" / "printable") leaves this method,
+        never which key. Chords with Ctrl/Alt/Win, and anything while the
+        push-to-talk chord is live, are not typing.
+        """
+        if self._state != _HotkeyState.UNARMED:
+            return
+        self._prune_released_keys(keep=name)
+        if self._held & {"ctrl_l", "ctrl_r", "alt", "win"}:
+            return
+        if key == keyboard.Key.enter or getattr(key, "vk", None) == 0x0D:
+            slot = "_emit_typing_enter"
+        elif key == keyboard.Key.space or (
+            isinstance(key, keyboard.KeyCode) and key.char is not None and key.char.isprintable()
+        ):
+            slot = "_emit_typing_printable"
+        else:
+            return
+        # Typing into our own windows (coach widget etc.) must not finish a step.
+        if _foreground_is_own_process():
+            return
+        self._post_main(slot)
+
     def _prune_released_keys(self, keep: str | None = None) -> None:
         """Drop held keys whose key-up we never saw.
 
@@ -286,7 +372,7 @@ class HotkeyMonitor(QObject):
             if name == keep or vk is None:
                 continue
             if not _get_async_key_state(vk) & 0x8000:
-                logger.debug("dropping stale held key %s", name)
+                logger.debug("dropping stale held key %s", _loggable(name))
                 self._held.discard(name)
                 self._held_vks.pop(name, None)
 
@@ -369,3 +455,11 @@ class HotkeyMonitor(QObject):
     @Slot()
     def _emit_escape(self) -> None:
         self.escape_pressed.emit()
+
+    @Slot()
+    def _emit_typing_enter(self) -> None:
+        self.typing_enter.emit()
+
+    @Slot()
+    def _emit_typing_printable(self) -> None:
+        self.typing_printable.emit()
