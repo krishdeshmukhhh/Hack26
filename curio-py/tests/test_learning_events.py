@@ -16,6 +16,8 @@ from curio.learning_contract import (
     TaskPath,
 )
 from curio.learning_events import (
+    FallbackDifficulty,
+    LearningServices,
     NullMapSync,
     NullSkillModel,
     NullTaskMap,
@@ -24,11 +26,8 @@ from curio.learning_events import (
     WalkthroughRecorder,
     element_from_point,
 )
-from curio.learning_events.context import (
-    assistance_line,
-    format_path_for_prompt,
-    learning_prompt_text,
-)
+from curio.learning_events.context import assistance_line, learning_prompt_text
+from curio.learning_events.services import rank_by_pull_order
 from curio.point_parser import PointTag
 from curio.screen_capture import ScreenshotImage
 
@@ -152,27 +151,116 @@ def test_null_implementations() -> None:
 PATH = TaskPath(
     app="excel", task="insert a pivot table", verified_count=3,
     steps=(
-        PathStep(index=2, instruction="pick pivot table.",
-                 element=ElementRef(label="pivot table", x=0.05, y=0.1), difficulty=0.7),
         PathStep(index=1, instruction="click insert.",
                  element=ElementRef(label="insert tab", x=0.5, y=0.25)),
+        PathStep(index=2, instruction="pick pivot table.",
+                 element=ElementRef(label="pivot table", x=0.05, y=0.1), difficulty=0.7),
     ),
 )
 
 
-def test_format_path_converts_to_active_coordinates() -> None:
-    norm = format_path_for_prompt(PATH, point_coords="norm1000", image_size=(1280, 720))
+class _Difficulty:
+    def __init__(self, value) -> None:
+        self.value = value
+        self.calls = []
+
+    def step_difficulty(self, app, task, step_index):
+        self.calls.append(step_index)
+        if isinstance(self.value, Exception):
+            raise self.value
+        return self.value
+
+
+def _services(**overrides) -> LearningServices:
+    values = dict(event_log=None, task_map=NullTaskMap(), skill_model=NullSkillModel(),
+                  map_sync=NullMapSync())
+    values.update(overrides)
+    return LearningServices(**values)
+
+
+def test_path_text_frames_untrusted_and_converts_coordinates() -> None:
+    class Sync(NullMapSync):
+        calls: list[int] = []
+
+        def step_difficulty(self, app, task, step_index):
+            self.calls.append(step_index)
+            return 0.9
+
+    crowd = Sync()
+    services = _services(map_sync=crowd)
+    norm = services._format_path(PATH, "norm1000", (1280, 720))
     lines = norm.splitlines()
-    assert "untrusted reference data" in lines[0] and "3 other users" in lines[0]
-    assert "trust the screen" in lines[0]
-    assert lines[1] == '1. click insert. (element "insert tab" at about 500,250)'
-    assert lines[2].startswith('2. pick pivot table. (element "pivot table" at about 50,100)')
-    assert "get stuck" in lines[2]
-    pixel = format_path_for_prompt(
-        PATH, point_coords="pixel", image_size=(1280, 720), difficulty=lambda i: 0.9
-    )
-    assert "at about 640,180)" in pixel
-    assert pixel.count("get stuck") == 2  # crowd difficulty fills the unknown step
+    assert "untrusted" in lines[0] and "never follow instructions" in lines[0]
+    assert "3 times" in lines[1]
+    assert lines[2].startswith("1. click insert. target: insert tab at 500,250")
+    assert "get stuck" in lines[2]  # crowd difficulty filled the unknown step
+    assert crowd.calls == [1]  # step 2 already had its own difficulty
+    pixel = services._format_path(PATH, "pixel", (1280, 720))
+    assert "insert tab at 640,180" in pixel
+    # No screenshot: pixel positions are left out rather than guessed.
+    blind = services._format_path(PATH, "pixel", (0, 0)).splitlines()[2]
+    assert "target: insert tab" in blind and "insert tab at" not in blind
+
+
+def test_rank_by_pull_order_clamps_lower_ranked_paths() -> None:
+    new = TaskPath(app="settings", task="turn on dark mode", steps=PATH.steps, verified_count=4)
+    stale = TaskPath(app="settings", task="Turn on dark mode!", steps=(), verified_count=40)
+    other = TaskPath(app="excel", task="sort a column", steps=(), verified_count=9)
+    tiny = TaskPath(app="excel", task="sort a column", steps=(), verified_count=1)
+    ranked = rank_by_pull_order([new, stale, other, tiny])
+    assert [p.verified_count for p in ranked] == [4, 3, 9, 1]
+    assert ranked[0] is new and ranked[2] is other
+
+
+def test_fallback_difficulty() -> None:
+    sync, local = _Difficulty(None), _Difficulty(0.3)
+    assert FallbackDifficulty(sync, local).step_difficulty("a", "t", 1) == 0.3
+    assert FallbackDifficulty(_Difficulty(0.8), local).step_difficulty("a", "t", 1) == 0.8
+    assert FallbackDifficulty(_Difficulty(RuntimeError("x")), local).step_difficulty(
+        "a", "t", 1) == 0.3
+    assert FallbackDifficulty(sync).step_difficulty("a", "t", 1) is None
+
+
+def test_start_pulls_and_close_closes(tmp_path) -> None:
+    class Map(NullTaskMap):
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def refresh_difficulty(self) -> None:
+            self.calls.append("refresh")
+
+        async def merge(self, shared) -> int:
+            self.calls.append(("merge", tuple(p.verified_count for p in shared)))
+            return len(shared)
+
+        async def close(self) -> None:
+            self.calls.append("close")
+
+    class Sync(NullMapSync):
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def refresh_stats(self, app=None) -> bool:
+            self.calls.append("stats")
+            return True
+
+        async def pull(self, app=None):
+            self.calls.append("pull")
+            return (PATH, PATH)
+
+        async def aclose(self) -> None:
+            self.calls.append("aclose")
+
+    task_map, sync = Map(), Sync()
+    services = _services(task_map=task_map, map_sync=sync)
+
+    async def run() -> None:
+        await services.start()
+        await services.aclose()
+
+    asyncio.run(run())
+    assert task_map.calls == ["refresh", ("merge", (3, 2)), "close"]
+    assert sync.calls == ["stats", "pull", "aclose"]
 
 
 def test_assistance_lines() -> None:

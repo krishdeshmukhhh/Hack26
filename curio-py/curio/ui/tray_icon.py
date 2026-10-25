@@ -34,6 +34,7 @@ class TrayIcon(QSystemTrayIcon):
     pet_selected = Signal(str)
     show_skills_requested = Signal()
     share_walkthroughs_toggled = Signal(bool)
+    open_stuck_map_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -71,6 +72,11 @@ class TrayIcon(QSystemTrayIcon):
         self._share_action.setCheckable(True)
         self._share_action.toggled.connect(self.share_walkthroughs_toggled.emit)
         menu.addAction(self._share_action)
+
+        self._stuck_map_action = QAction("Open stuck map", menu)
+        self._stuck_map_action.triggered.connect(self.open_stuck_map_requested.emit)
+        self._stuck_map_action.setVisible(False)  # only with a map server configured
+        menu.addAction(self._stuck_map_action)
 
         for label, requested in (
             ("Tutorial URL coach", self.show_tutorial_requested),
@@ -124,8 +130,9 @@ class TrayIcon(QSystemTrayIcon):
         self._share_action.setChecked(enabled)
         self._share_action.blockSignals(blocked)
 
-    def set_learning_available(self, available: bool) -> None:
+    def set_learning_available(self, available: bool, *, map_server: bool = False) -> None:
         self._share_action.setEnabled(available)
+        self._stuck_map_action.setVisible(available and map_server)
 
     def _on_quit(self) -> None:
         app = QApplication.instance()

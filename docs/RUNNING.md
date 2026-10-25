@@ -165,6 +165,35 @@ An animated fox appears next to your cursor and an icon in the system tray.
 Use tray menu > **Pet** to select Fox, Cat, Red Panda or Ferret. Selection applies
 immediately and persists across restarts. A triangle indicates asset-load fallback.
 
+### Walkthrough learning and the shared map
+
+On by default and local only. Guided walkthroughs are logged, finished ones
+become verified paths, and a per-concept skill model decides how much help
+to give. Tray menu > **Skills…** opens the skill map.
+
+```toml
+[learning]
+enabled = true
+share_walkthroughs = false   # tray > "Share walkthroughs anonymously" saves this
+sync_url = ""                # e.g. "http://192.168.1.20:8765"; empty = no server
+```
+
+To share paths between laptops, run the map server on one machine (it's
+standard library only):
+
+```powershell
+cd Hack26\curio-py
+uv run curio-map-server --host 0.0.0.0 --port 8765 --data map.json
+uv run curio-map-seed --url http://127.0.0.1:8765 --users 40   # optional demo data
+```
+
+Set `sync_url` on every laptop and restart Curio. Laptops pull the map at
+startup and after each push. Only laptops with sharing on push. With a
+server configured, tray > **Open stuck map** opens the dashboard, which shows
+where people get stuck. Allow port 8765 through Windows Firewall on the
+server machine. See [map-sync.md](map-sync.md), [task-map.md](task-map.md)
+and [skills.md](skills.md).
+
 ### 4. Use it
 
 1. Click on a normal window (not an admin PowerShell).

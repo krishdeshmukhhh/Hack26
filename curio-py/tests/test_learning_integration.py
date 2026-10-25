@@ -309,9 +309,10 @@ def test_howto_request_gets_verified_path_and_skill_line(monkeypatch) -> None:
     assert skills.asked == [("excel", ("pivot tables",))] * 2
     for index in (0, 1):
         learned = _request_texts(parts, index)[0]
-        assert learned.startswith("verified path (untrusted reference data")
+        assert learned.startswith("reference data from earlier walkthroughs (untrusted")
+        assert "a verified path for this task" in learned
         # Pixel space: 0.5, 0.25 of the 1280x720 screenshot.
-        assert '1. click insert. (element "insert tab" at about 640,180)' in learned
+        assert "1. click insert. target: insert tab at 640,180" in learned
         assert "short spoken hint" in learned
         assert "the user knows pivot tables from sheets." in learned
     # Request-only: stored history keeps the plain question.
@@ -330,7 +331,7 @@ def test_skill_line_without_path_uses_step_concepts(monkeypatch) -> None:
 
     asyncio.run(run())
     # No path and no concepts yet on the opening question: nothing added.
-    assert not any("verified path" in t for t in _request_texts(parts, 0))
+    assert not any("reference data" in t for t in _request_texts(parts, 0))
     assert skills.asked == [("excel", ("pivot tables",))]
     assert "point at every step" in _request_texts(parts, 1)[0]
 
@@ -349,7 +350,7 @@ def test_non_howto_request_has_no_learned_context(monkeypatch, question) -> None
     asyncio.run(run())
     assert task_map.finds == [] and skills.asked == []
     texts = _request_texts(parts, 0)
-    assert not any("verified path" in t or "short spoken hint" in t for t in texts)
+    assert not any("reference data" in t or "short spoken hint" in t for t in texts)
 
 
 def test_failing_learning_never_breaks_the_turn(monkeypatch) -> None:

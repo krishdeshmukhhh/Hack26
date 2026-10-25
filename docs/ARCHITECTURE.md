@@ -129,6 +129,67 @@ dropped ("do I enable light mode…", "I want to export…"). The
 reminder goes into that request only, not into the stored history. In live
 tests this took first-step tagging from 1 in 3 runs to 4 in 4.
 
+## Walkthrough learning
+
+Every person Curio walks through a task makes the next walkthrough better.
+Shared types live in `curio/learning_contract.py`. The wiring is in
+`curio/learning_events/`, and `app._build_learning` constructs it.
+
+```
+answer with [STEP] ──► WalkthroughRecorder ──► StepEvent ──► SqliteEventLog
+                         (pending step settled          │ walkthrough ends
+                          by the next event)            ▼
+                                                 WalkthroughSummary
+                    ┌──────────────────────────────────┼──────────────────────────┐
+                    ▼                                  ▼                          ▼
+          SqliteTaskMap.record              SqliteSkillModel.observe     HttpMapSync.push
+          (curio/task_map)                 (curio/skills)              (curio/map_sync,
+                    ▲                                  ▲                  sharing on only)
+                    └── merge(pull()) ◄────────────────┴── step_difficulty ───┘
+```
+
+- **Tags.** Walkthrough answers end with `[POINT:…] [STEP:k/N] [CONCEPTS:a, b]`.
+  `parse_concepts_tag` takes the concepts tag from anywhere in the answer
+  (one to three app-independent skill names, normalised with `concept_key`).
+  Like the other tags it's stripped from speech, history and the display,
+  even half-streamed.
+- **Outcomes.** The first STEP answer starts a recorder keyed on
+  `app_key(window title)` and `task_key(question)`. Each answer leaves a
+  pending step with its instruction, the element at 0..1 fractions of the
+  screenshot, its concepts and its assistance (`POINTED` with a point,
+  `HINTED` without). The next event settles it:
+  - higher step index: `SUCCEEDED`
+  - same or lower index: `RETRIED`
+  - tagless answer: `SUCCEEDED`, walkthrough completed
+  - Esc, a new question or an error: `ABANDONED`
+  - two minutes without a click: `TIMED_OUT`
+
+  `CompanionManager._end_walkthrough(outcome)` is the single exit, and
+  `_step_assistance` is the hook for hands-free mode's `DID_IT`.
+- **Fan-out.** `LearningServices` runs all writes as background tasks that
+  log failures. Event appends, `task_map.record` and `skill_model.observe`
+  run for every summary. `map_sync.push` runs only when the sharing toggle
+  is on, and a successful push is followed by a pull and merge.
+- **Pull ranking.** The server lists the best path first within each task,
+  but the task map prefers the highest `verified_count`. `rank_by_pull_order`
+  therefore clamps every later path for a task below the first one before
+  merging, so an outdated path with many old verifications can't win.
+- **Per request.** This covers how-to questions and walkthrough continuations
+  only. `task_map.find` supplies the path, which WS2's `format_for_prompt`
+  renders in the active POINT coordinates. Steps with unknown difficulty get
+  the crowd's value, and hard steps are called out. The skill model then
+  gives an assistance level for the path's concepts (or the current step's),
+  mapped to one prompt line. `NONE`/`HINTED` means a spoken hint with
+  `[POINT:none]`; `DID_IT` means small steps, pointing at each. Its
+  `prompt_context` sentence is added too. Everything goes into that request
+  only, as untrusted reference data, never into stored history. The lookup
+  is capped at 1.5 s and fails soft.
+- **Privacy.** The event log, task map and skill model are local SQLite
+  files under `%LOCALAPPDATA%\Curio`. `summary_to_wire` drops ids,
+  timestamps and window titles, and the server rejects unknown keys.
+  Difficulty for the skill model comes from map sync first, then this
+  machine's own history (`FallbackDifficulty`).
+
 ## Voice
 
 `KokoroTTSClient` splits the answer into sentences and synthesises the next

@@ -17,7 +17,8 @@ from pathlib import Path
 
 import qasync
 from platformdirs import user_config_dir, user_log_dir
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
 from curio.clients.kokoro_tts_client import KokoroTTSClient
@@ -32,19 +33,21 @@ from curio.companion_manager import CompanionManager
 from curio.config import Config, ConfigError, save_share_walkthroughs
 from curio.hotkey import HotkeyMonitor
 from curio.learning_events import (
+    FallbackDifficulty,
     LearningServices,
     NullMapSync,
-    NullSkillModel,
-    NullTaskMap,
     SqliteEventLog,
     default_event_log_path,
 )
-from curio.learning_events.skills_window import SkillsWindow
 from curio.logging_config import configure_logging
+from curio.map_sync.client import HttpMapSync
 from curio.memory_runtime import MemoryRuntime
 from curio.mic_capture import MicCapture
 from curio.pet_config import PetSettings, save_pet_selection
 from curio.screen_capture import capture_all
+from curio.skills import ConceptGraph, SqliteSkillModel
+from curio.skills.widget import SkillsWidget
+from curio.task_map import SqliteTaskMap
 from curio.ui.coaching_window import CoachingWindow
 from curio.ui.history_window import HistoryWindow
 from curio.ui.memory_window import MemoryWindow
@@ -69,16 +72,23 @@ def _configured_llm(config: Config):
 def _build_learning(config: Config) -> LearningServices | None:
     """Walkthrough learning, or None when ``[learning] enabled = false``.
 
-    The task map, skill model and map sync are null stand-ins until their
-    branches are merged and constructed here.
+    Map sync talks to a server only when ``sync_url`` is set; pushes also need
+    the sharing toggle. Pulling sends nothing about the user.
     """
     if not config.learning.enabled:
         return None
+    task_map = SqliteTaskMap()
+    sync_url = config.learning.sync_url
+    map_sync = HttpMapSync(sync_url) if sync_url else NullMapSync()
+    skill_model = SqliteSkillModel(
+        graph=ConceptGraph.load(),
+        difficulty=FallbackDifficulty(map_sync, task_map.local_difficulty),
+    )
     return LearningServices(
         event_log=SqliteEventLog(default_event_log_path()),
-        task_map=NullTaskMap(),
-        skill_model=NullSkillModel(),
-        map_sync=NullMapSync(),
+        task_map=task_map,
+        skill_model=skill_model,
+        map_sync=map_sync,
         share_walkthroughs=config.learning.share_walkthroughs,
     )
 
@@ -201,6 +211,7 @@ def run() -> int:
     memory_runtime = None
     memory_window = None
     learning = None
+    skills_window = None
     coaching_runtime = None
     coaching_window = None
     if result.config is not None:
@@ -229,7 +240,8 @@ def run() -> int:
             tts = TTSClient(worker_url=result.config.worker_url)
         learning = _build_learning(result.config)
         if learning is not None:
-            skills_window = SkillsWindow(learning.skill_model)
+            skills_window = SkillsWidget(learning.skill_model)
+            tray_icon.show_skills_requested.connect(skills_window.refresh)
             tray_icon.show_skills_requested.connect(skills_window.show)
             tray_icon.show_skills_requested.connect(skills_window.raise_)
             tray_icon.show_skills_requested.connect(skills_window.activateWindow)
@@ -247,7 +259,11 @@ def run() -> int:
                 logger.info("learning: sharing %s", "on" if enabled else "off")
 
             tray_icon.share_walkthroughs_toggled.connect(toggle_sharing)
-            tray_icon.set_learning_available(True)
+            sync_url = result.config.learning.sync_url
+            tray_icon.set_learning_available(True, map_server=bool(sync_url))
+            tray_icon.open_stuck_map_requested.connect(
+                lambda: QDesktopServices.openUrl(QUrl(f"{sync_url}/"))
+            )
         manager = CompanionManager(
             config=result.config,
             mic=mic,
@@ -366,10 +382,12 @@ def run() -> int:
         if isinstance(tts, KokoroTTSClient):
             loop.create_task(tts.preload())
         if learning is not None:
-            learning.refresh_shared()  # pull the shared map once at startup
+            loop.create_task(learning.start())
         loop.run_forever()
         if learning is not None:
-            loop.run_until_complete(learning.drain())
+            if skills_window is not None:
+                skills_window.close()
+            loop.run_until_complete(learning.aclose())
         if coaching_window is not None:
             loop.run_until_complete(coaching_window.aclose())
         if coaching_runtime is not None:
