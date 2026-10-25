@@ -305,3 +305,11 @@ def test_reset_clears_state_and_totals():
 def test_same_script_gives_same_signals():
     steps = [("excel", "a - Excel", 20), ("youtube", "b - YouTube", 150), ("excel", "a", 30)]
     assert _run(steps)[1] == _run(steps)[1]
+
+
+def test_out_of_order_samples_are_dropped():
+    tracker = ThresholdDriftTracker(plan=_plan())
+    late, early = scripted_samples([("excel", "a", 2), ("docs", "b", 2)], start=T0)[::-1]
+    tracker.update(late, _assess(late))
+    assert tracker.update(early, _assess(early)) == []
+    assert tracker.totals.on_goal_seconds == 0

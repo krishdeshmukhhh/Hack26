@@ -115,6 +115,8 @@ class ThresholdDriftTracker:
         t, s = self.thresholds, self._s
         now = sample.at
         previous = s.previous
+        if previous is not None and now < previous.at:
+            return []  # stale: an earlier assess() finished late; keep time monotonic
         dt = 0.0
         if previous is not None:
             dt = min(max((now - previous.at).total_seconds(), 0.0), t.max_sample_gap_seconds)
