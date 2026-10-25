@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curio Stuck Map</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12151d;
+    --panel-2: #181c26;
+    --line: #232837;
+    --text: #e9ecf3;
+    --muted: #8a93a8;
+    --faint: #5b6378;
+    --accent: #7c9cff;
+    --ok: #3ccf8e;
+    --warn: #f5b14c;
+    --bad: #ff5d6c;
+    --radius: 14px;
+    font-synthesis: none;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(124, 156, 255, 0.10), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(255, 93, 108, 0.07), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1480px; margin: 0 auto; padding: 28px 32px 48px; }
+
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  .brand { display: flex; flex-direction: column; gap: 6px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    color: var(--muted); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 600;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(60, 207, 142, 0.6); animation: pulse 2s infinite; }
+  .dot.off { background: var(--bad); animation: none; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(60,207,142,.55);} 70% { box-shadow: 0 0 0 10px rgba(60,207,142,0);} 100% { box-shadow: 0 0 0 0 rgba(60,207,142,0);} }
+  h1 { margin: 0; font: 600 38px/1.1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; letter-spacing: -0.02em; }
+  h1 em { font-style: normal; color: var(--bad); }
+
+  .kpis { display: flex; gap: 12px; flex-wrap: wrap; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 18px; min-width: 132px; }
+  .kpi b { display: block; font: 600 28px/1.1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  .kpi span { color: var(--muted); font-size: 12px; letter-spacing: 0.04em; }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px; margin-top: 28px; align-items: start; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 20px 22px; }
+  .panel h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  .chip {
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+    border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { color: var(--text); border-color: var(--accent); background: rgba(124,156,255,.12); }
+
+  .app { margin-bottom: 26px; }
+  .app:last-child { margin-bottom: 0; }
+  .app-name { font: 600 20px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; text-transform: capitalize; margin: 0 0 12px; display: flex; align-items: baseline; gap: 10px; }
+  .app-name small { color: var(--faint); font-size: 13px; font-weight: 400; text-transform: none; }
+
+  .task { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px 16px; margin-bottom: 12px; }
+  .task-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .task-title { font-weight: 600; font-size: 16px; }
+  .task-title::before { content: "\201C"; color: var(--faint); }
+  .task-title::after { content: "\201D"; color: var(--faint); }
+  .task-meta { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .task-meta b { color: var(--text); font-weight: 600; }
+
+  .steps { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding-bottom: 2px; }
+  .step {
+    flex: 1 1 0; min-width: 118px; border-radius: 11px; padding: 10px 12px 11px;
+    position: relative; color: #0b0d12; transition: background-color .6s ease, transform .3s ease;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .step.hot { box-shadow: 0 0 0 2px rgba(255,93,108,.9), 0 8px 26px rgba(255,93,108,.35); }
+  .arrow { flex: 0 0 18px; display: grid; place-items: center; color: var(--faint); font-size: 14px; }
+  .step .n { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; opacity: .7; }
+  .step .label { font-weight: 600; font-size: 13.5px; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .step .pct { font: 700 22px/1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; margin-top: auto; }
+  .step .sub { font-size: 11px; opacity: .7; font-variant-numeric: tabular-nums; }
+
+  .confusing { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .confusing li { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; position: relative; overflow: hidden; }
+  .confusing .bar { position: absolute; left: 0; bottom: 0; height: 3px; transition: width .6s ease; }
+  .confusing .big { font: 700 30px/1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  .confusing p { margin: 6px 0 0; color: var(--muted); }
+  .confusing p strong { color: var(--text); font-weight: 600; }
+  .confusing .rank { position: absolute; top: 12px; right: 14px; color: var(--faint); font-size: 12px; font-weight: 600; }
+
+  .legend { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin-top: 18px; }
+  .legend .ramp { height: 8px; width: 180px; border-radius: 4px; }
+
+  .empty { color: var(--muted); padding: 36px 8px; text-align: center; }
+  .empty code { background: var(--panel-2); border: 1px solid var(--line); padding: 2px 8px; border-radius: 6px; color: var(--text); }
+  footer { margin-top: 26px; color: var(--faint); font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 18px 16px 32px; }
+    h1 { font-size: 28px; }
+    .kpi { min-width: 0; flex: 1 1 40%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="eyebrow"><span id="live" class="dot"></span><span id="live-text">Live from every Curio</span></span>
+      <h1>Where people get <em>stuck</em></h1>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><b id="k-walk">–</b><span>walkthroughs shared</span></div>
+      <div class="kpi"><b id="k-tasks">–</b><span>tasks mapped</span></div>
+      <div class="kpi"><b id="k-done">–</b><span>finished the task</span></div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Step-by-step stuck rate</h2>
+      <div class="filters" id="filters"></div>
+      <div id="apps"></div>
+      <div class="legend"><span>0%</span><span class="ramp" id="ramp"></span><span>60%+ stuck</span></div>
+    </section>
+    <aside class="panel">
+      <h2>Most confusing steps</h2>
+      <ol class="confusing" id="confusing"></ol>
+    </aside>
+  </div>
+
+  <footer>
+    <span>Anonymous: no ids, timestamps or window titles leave a user's PC.</span>
+    <span id="updated"></span>
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const POLL_MS = 3000;
+  let selectedApp = "";
+  let lastStats = null;
+
+  // 0 → green, 0.3 → amber, 0.6+ → red.
+  function heat(rate) {
+    const t = Math.max(0, Math.min(1, rate / 0.6));
+    const hue = 150 - 150 * t;
+    const light = 62 - 4 * t;
+    return `hsl(${hue.toFixed(0)} 72% ${light.toFixed(0)}%)`;
+  }
+  const pct = (r) => `${Math.round(r * 100)}%`;
+
+  function el(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") node.className = v;
+      else if (k === "style") Object.assign(node.style, v);
+      else node.setAttribute(k, v);
+    }
+    for (const c of children) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return node;
+  }
+
+  document.getElementById("ramp").style.background =
+    `linear-gradient(90deg, ${[0, 0.15, 0.3, 0.45, 0.6].map(heat).join(", ")})`;
+
+  function renderFilters(apps) {
+    const box = document.getElementById("filters");
+    box.replaceChildren();
+    const names = ["", ...apps.map((a) => a.app)];
+    if (selectedApp && !names.includes(selectedApp)) selectedApp = "";
+    for (const name of names) {
+      const chip = el("button", { class: "chip", type: "button", "aria-pressed": String(name === selectedApp) }, name || "All apps");
+      chip.addEventListener("click", () => { selectedApp = name; render(lastStats); });
+      box.append(chip);
+    }
+  }
+
+  function renderApps(apps) {
+    const box = document.getElementById("apps");
+    box.replaceChildren();
+    const shown = apps.filter((a) => !selectedApp || a.app === selectedApp);
+    if (!shown.length) {
+      box.append(el("div", { class: "empty" }, "No walkthroughs yet. Seed some with ",
+        el("code", {}, "python -m curio.map_sync.seed")));
+      return;
+    }
+    for (const app of shown) {
+      const total = app.tasks.reduce((s, t) => s + t.walkthroughs, 0);
+      const section = el("div", { class: "app" },
+        el("h3", { class: "app-name" }, app.app, el("small", {}, `${total} walkthroughs`)));
+      for (const task of app.tasks) {
+        const worst = Math.max(...task.steps.map((s) => s.stuck_rate));
+        const steps = el("div", { class: "steps" });
+        task.steps.forEach((s, i) => {
+          if (i) steps.append(el("div", { class: "arrow", "aria-hidden": "true" }, "›"));
+          const hot = s.stuck_rate === worst && worst >= 0.25;
+          steps.append(el("div", {
+              class: hot ? "step hot" : "step",
+              style: { background: heat(s.stuck_rate) },
+              title: `${s.stuck} of ${s.attempts} got stuck`,
+            },
+            el("span", { class: "n" }, `STEP ${s.index}`),
+            el("span", { class: "label" }, s.label),
+            el("span", { class: "pct" }, pct(s.stuck_rate)),
+            el("span", { class: "sub" }, `${s.stuck}/${s.attempts} stuck`)));
+        });
+        const done = task.walkthroughs ? task.completed / task.walkthroughs : 0;
+        section.append(el("div", { class: "task" },
+          el("div", { class: "task-head" },
+            el("span", { class: "task-title" }, task.task),
+            el("span", { class: "task-meta" }, el("b", {}, task.walkthroughs), " tries · ",
+              el("b", {}, pct(done)), " finished")),
+          steps));
+      }
+      box.append(section);
+    }
+  }
+
+  function renderConfusing(hardest) {
+    const list = document.getElementById("confusing");
+    list.replaceChildren();
+    const rows = hardest.filter((h) => !selectedApp || h.app === selectedApp).slice(0, 6);
+    if (!rows.length) {
+      list.append(el("li", {}, el("p", {}, "Nothing confusing yet.")));
+      return;
+    }
+    rows.forEach((h, i) => {
+      list.append(el("li", {},
+        el("span", { class: "rank" }, `#${i + 1}`),
+        el("span", { class: "big", style: { color: heat(h.stuck_rate) } }, pct(h.stuck_rate)),
+        el("p", {}, "of users get stuck at ", el("strong", {}, `“${h.label}”`), " in ",
+          el("strong", {}, h.app), ` while trying to ${h.task}`),
+        el("span", { class: "bar", style: { width: pct(h.stuck_rate), background: heat(h.stuck_rate) } })));
+    });
+  }
+
+  function render(stats) {
+    if (!stats) return;
+    const apps = stats.apps || [];
+    const tasks = apps.flatMap((a) => a.tasks);
+    const walks = tasks.reduce((s, t) => s + t.walkthroughs, 0);
+    const done = tasks.reduce((s, t) => s + t.completed, 0);
+    document.getElementById("k-walk").textContent = walks.toLocaleString();
+    document.getElementById("k-tasks").textContent = tasks.length;
+    document.getElementById("k-done").textContent = walks ? pct(done / walks) : "–";
+    renderFilters(apps);
+    renderApps(apps);
+    renderConfusing(stats.hardest || []);
+  }
+
+  function setLive(ok) {
+    document.getElementById("live").classList.toggle("off", !ok);
+    document.getElementById("live-text").textContent = ok ? "Live from every Curio" : "Map server unreachable";
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch("/v1/stats", { cache: "no-store" });
+      if (!res.ok) throw new Error(res.status);
+      const stats = await res.json();
+      const changed = JSON.stringify(stats) !== JSON.stringify(lastStats);
+      lastStats = stats;
+      if (changed) render(stats);
+      setLive(true);
+      document.getElementById("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+      setLive(false);
+    } finally {
+      setTimeout(poll, POLL_MS);
+    }
+  }
+  poll();
+})();
+</script>
+</body>
+</html>
