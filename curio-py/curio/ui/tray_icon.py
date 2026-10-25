@@ -83,7 +83,9 @@ class TrayIcon(QSystemTrayIcon):
         self._lab_menu.addAction(self._lab_status)
         self._lab_stuck = QAction("I'm stuck (tell the TA)", self)
         self._lab_stuck.setCheckable(True)
-        self._lab_stuck.triggered.connect(self.lab_stuck_toggled.emit)
+        self._lab_stuck.triggered.connect(
+            lambda checked: self.lab_stuck_toggled.emit(checked)
+        )
         self._lab_menu.addAction(self._lab_stuck)
         self._lab_steps_menu = self._lab_menu.addMenu("I'm on step")
         self._lab_step_group = QActionGroup(self)

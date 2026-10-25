@@ -1,0 +1,12 @@
+
+name = "Notepad classroom test"
+code = "PETLAB"
+
+[[steps]]
+title = "Open Notepad"
+
+[[steps]]
+title = "Type a sentence"
+
+[[steps]]
+title = "Open the File menu to save the document"

@@ -257,6 +257,43 @@ def test_client_reports_wrong_code(qt_app, lab_server) -> None:
     asyncio.run(run())
 
 
+def test_tray_stuck_toggle_updates_dashboard_and_receives_hint(qt_app, lab_server) -> None:
+    from curio.ui.tray_icon import TrayIcon
+
+    client = LabClient(LabSettings(enabled=True, server_url=lab_server, code="PLOT3"))
+    tray = TrayIcon()
+    tray.lab_stuck_toggled.connect(client.tracker.set_stuck)
+    hints: list[LabHint] = []
+    client.hint_received.connect(hints.append)
+
+    async def run() -> None:
+        async with httpx.AsyncClient() as http:
+            await client.check_in(http)
+            client.tracker.set_step(3)
+            tray._lab_stuck.trigger()
+            assert client.tracker.stuck
+            await client.check_in(http)
+            headers = {"X-Lab-Key": "secret"}
+            board = (await http.get(f"{lab_server}/api/dashboard", headers=headers)).json()
+            assert board["stuck"] == 1
+            sent = await http.post(
+                f"{lab_server}/api/hints", headers=headers,
+                json={"step": 3, "text": "press Run", "audience": "stuck"},
+            )
+            assert sent.json()["recipients"] == 1
+            await client.check_in(http)
+            board = (await http.get(f"{lab_server}/api/dashboard", headers=headers)).json()
+            assert board["hints"][0]["delivered"] == 1
+            tray._lab_stuck.trigger()
+            assert not client.tracker.stuck
+            await client.check_in(http)
+            board = (await http.get(f"{lab_server}/api/dashboard", headers=headers)).json()
+            assert board["stuck"] == 0
+
+    asyncio.run(run())
+    assert hints == [LabHint(1, 3, "press Run")]
+
+
 # ---------------------------------------------------------------------------
 # CompanionManager: lab prompt, [LAB:k] tags and hint delivery
 # ---------------------------------------------------------------------------
