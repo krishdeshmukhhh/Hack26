@@ -36,6 +36,8 @@ llm_base_url = "http://localhost:8000/v1"
 llm_model = "Qwen/Qwen3-VL-32B-Instruct"
 # Must match vLLM's --api-key. Set one on a shared cluster.
 llm_api_key = ""
+# Sampling temperature (0-2). Low keeps answers and POINT tags consistent.
+llm_temperature = 0.2
 # Coordinate format the model uses for pointing. "norm1000" for Qwen3-VL,
 # "pixel" for Qwen2.5-VL and most other models.
 point_coords = "norm1000"

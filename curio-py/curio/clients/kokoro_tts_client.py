@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import threading
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -140,6 +141,64 @@ class KokoroTTSClient(QObject):
             msg = f"Kokoro speech failed: {exc}"
             logger.error(msg)
             self.error.emit(msg)
+
+    async def speak_stream(self, chunks: AsyncIterator[str]) -> None:
+        """Speak text chunks as they arrive, synthesising ahead of playback.
+
+        Used while the LLM is still streaming: the first finished sentence is
+        voiced immediately and later ones are synthesised during playback.
+        Returns when the iterator is exhausted and everything has played, or
+        after ``stop()``.
+        """
+        self._stopped = False
+        kokoro = await asyncio.to_thread(self._get_kokoro)
+        if kokoro is None:
+            if self._fallback is not None:
+                text = " ".join([c async for c in chunks]).strip()
+                if text:
+                    await self._fallback.speak(text)
+            return
+
+        audio_queue: asyncio.Queue[tuple[np.ndarray, int] | None] = asyncio.Queue()
+
+        async def synthesize_all() -> None:
+            try:
+                async for chunk in chunks:
+                    for sentence in split_sentences(chunk):
+                        if self._stopped:
+                            return
+                        audio_queue.put_nowait(await asyncio.to_thread(self._synthesize, sentence))
+            finally:
+                audio_queue.put_nowait(None)
+
+        producer = asyncio.ensure_future(synthesize_all())
+        try:
+            played_any = False
+            while True:
+                item = await audio_queue.get()
+                if item is None or self._stopped:
+                    break
+                samples, sample_rate = item
+                if not played_any:
+                    played_any = True
+                    self.playback_started.emit()
+                await self._play(samples, sample_rate)
+                if self._stopped:
+                    return
+            if self._stopped:
+                return
+            await producer  # surfaces synthesis errors
+            if played_any:
+                self.playback_finished.emit()
+        except asyncio.CancelledError:
+            sd.stop()
+            raise
+        except Exception as exc:  # noqa: BLE001 — funnel to the error signal
+            msg = f"Kokoro speech failed: {exc}"
+            logger.error(msg)
+            self.error.emit(msg)
+        finally:
+            producer.cancel()
 
     def stop(self) -> None:
         """Stop speaking immediately."""

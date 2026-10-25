@@ -13,7 +13,7 @@ import random
 from collections.abc import Callable
 
 from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer, QVariantAnimation
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from curio.ui.window_effects import make_overlay_window
@@ -30,9 +30,12 @@ POINTER_PHRASES = (
     "found it!",
 )
 
-PADDING_X = 8
-PADDING_Y = 4
-CORNER_RADIUS = 6
+# Sized to stay legible in a 1080p screen recording (Qt scales logical pixels
+# with the Windows display scale, so these hold at 100/125/150%).
+FONT_PIXEL_SIZE = 15  # was 12
+PADDING_X = 11  # was 8
+PADDING_Y = 6  # was 4
+CORNER_RADIUS = 8  # was 6
 # Room around the pill for its glow.
 GLOW_MARGIN = 18
 
@@ -83,8 +86,8 @@ class PointerBubble(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self._font = QFont()
-        self._font.setPixelSize(12)
-        self._font.setWeight(QFont.Weight.Medium)
+        self._font.setPixelSize(FONT_PIXEL_SIZE)
+        self._font.setWeight(QFont.Weight.DemiBold)
 
         self._full_text = ""
         self._shown_chars = 0
@@ -260,12 +263,16 @@ class PointerBubble(QWidget):
             )
 
         painter.setBrush(self._color)
+        # Light rim keeps the pill's edge visible on dark and blue backgrounds.
+        painter.setPen(QPen(QColor(255, 255, 255, 215), 1.5))
         painter.drawRoundedRect(pill, CORNER_RADIUS, CORNER_RADIUS)
         painter.setFont(self._font)
+        text_rect = pill.adjusted(PADDING_X, 0, 0, 0)
+        align = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        shown = self._full_text[: self._shown_chars]
+        # Soft dark shadow under the white text for contrast on the blue pill.
+        painter.setPen(QColor(0, 0, 0, 110))
+        painter.drawText(text_rect.translated(0, 1), align, shown)
         painter.setPen(QColor("#ffffff"))
-        painter.drawText(
-            pill.adjusted(PADDING_X, 0, 0, 0),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            self._full_text[: self._shown_chars],
-        )
+        painter.drawText(text_rect, align, shown)
         painter.end()

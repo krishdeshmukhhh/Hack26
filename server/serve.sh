@@ -59,6 +59,17 @@ cmd=(vllm serve "$MODEL_PATH"
     --limit-mm-per-prompt "{\"image\": $MAX_IMAGES}"
     --gpu-memory-utilization "$GPU_MEM_UTIL")
 
+# Latency knobs (see curio.env.example). Defaults live here so an older
+# curio.env without these lines keeps working.
+# Prefix caching reuses the KV cache of the long, identical system prompt.
+if [[ "${ENABLE_PREFIX_CACHING:-1}" == "1" ]]; then
+    cmd+=(--enable-prefix-caching)
+else
+    cmd+=(--no-enable-prefix-caching)
+fi
+[[ -z "${MAX_NUM_SEQS:-}" ]] || cmd+=(--max-num-seqs "$MAX_NUM_SEQS")
+[[ -z "${MM_PROCESSOR_KWARGS:-}" ]] || cmd+=(--mm-processor-kwargs "$MM_PROCESSOR_KWARGS")
+
 if [[ -n "${DRY_RUN:-}" ]]; then
     echo "GPU=$GPU PORT=$PORT"
     printf '%q ' "${cmd[@]}"

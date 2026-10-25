@@ -49,6 +49,8 @@ class LocalConfig:
     whisper_device: str
     tts_engine: str
     tts_voice: str
+    # Sampling temperature for the local LLM; low keeps answers/POINT tags steady.
+    llm_temperature: float = 0.2
 
     @classmethod
     def from_dict(cls, data: object) -> LocalConfig:
@@ -88,6 +90,16 @@ class LocalConfig:
                 f"got {tts_engine!r}"
             )
 
+        llm_temperature = data.get("llm_temperature", 0.2)
+        if (
+            isinstance(llm_temperature, bool)
+            or not isinstance(llm_temperature, (int, float))
+            or not 0.0 <= llm_temperature <= 2.0
+        ):
+            raise ConfigError(
+                f"local.llm_temperature must be a number between 0 and 2, got {llm_temperature!r}"
+            )
+
         return cls(
             llm_base_url=llm_base_url,
             llm_model=llm_model,
@@ -97,6 +109,7 @@ class LocalConfig:
             whisper_device=whisper_device,
             tts_engine=tts_engine,
             tts_voice=_str("tts_voice", ""),
+            llm_temperature=float(llm_temperature),
         )
 
 

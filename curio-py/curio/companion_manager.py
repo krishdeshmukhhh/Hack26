@@ -14,8 +14,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import time
 from collections import deque
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -55,7 +56,9 @@ from curio.point_parser import (
 )
 from curio.prompts import build_system_prompt, is_howto_question, walkthrough_reminder
 from curio.screen_capture import ScreenshotImage
+from curio.speech_chunker import SpeechChunker
 from curio.state import VoiceState
+from curio.window_context import describe_windows
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,11 @@ class CompanionManager(QObject):
         self._current_screenshots: list[ScreenshotImage] = []
         self._speak_task: asyncio.Task[None] | None = None
         self._generation = 0
+        # Sentence-chunked speech while the LLM streams (None when the TTS
+        # client can't stream or no turn is streaming).
+        self._speech: tuple[SpeechChunker, asyncio.Queue[str | None]] | None = None
+        # Per-turn timing marks (time.monotonic), logged when speech ends.
+        self._marks: dict[str, float] = {}
         self._hands_free_recording = False
         self._strip_hands_free_command = False
 
@@ -352,6 +360,7 @@ class CompanionManager(QObject):
             self._coaching.interrupt()
         self._end_walkthrough()
         self._cancel_flag = True
+        self._speech = None
         self._tts.stop()
         self.speaking_changed.emit(False)
         if self._speak_task is not None and not self._speak_task.done():
@@ -426,7 +435,12 @@ class CompanionManager(QObject):
         if task is not None and task is not self._current_task:
             return
         if not self._cancel_flag:
+            self._mark("first_token")
             self.response_delta.emit(text)
+            if self._speech is not None:
+                chunker, queue = self._speech
+                for chunk in chunker.feed(text):
+                    queue.put_nowait(chunk)
 
     # ------------------------------------------------------------------
     # Error handler
@@ -438,7 +452,15 @@ class CompanionManager(QObject):
         except RuntimeError:
             task = None
         sender = self.sender()
-        if sender in (self._llm, self._tts):
+        streaming = self._speech is not None and self._state == VoiceState.PROCESSING
+        if sender is self._tts and streaming:
+            # Streamed speech failed while the model is still answering: the
+            # turn is over, so stop it instead of leaving it half-spoken.
+            self._stop_speaking()
+            if self._current_task is not None and self._current_task is not task:
+                self._cancel_flag = True
+                self._current_task.cancel()
+        elif sender in (self._llm, self._tts):
             if self._state != VoiceState.RESPONDING:
                 return
             if task is not None and task not in (self._current_task, self._speak_task):
@@ -453,7 +475,22 @@ class CompanionManager(QObject):
     # Guided walkthroughs
     # ------------------------------------------------------------------
 
+    def _mark(self, name: str) -> None:
+        """Record when a turn milestone first happened (for the timing log)."""
+        self._marks.setdefault(name, time.monotonic())
+
+    def _log_timings(self) -> None:
+        start = self._marks.get("start")
+        if start is None:
+            return
+        parts = [f"{k}={self._marks[k] - start:.2f}s" for k in
+                 ("captured", "first_token", "first_audio", "llm_done")
+                 if k in self._marks]
+        logger.info("turn timings: %s total=%.2fs", " ".join(parts), time.monotonic() - start)
+        self._marks = {}
+
     def _stop_speaking(self) -> None:
+        self._speech = None
         self._tts.stop()
         if self._speak_task is not None and not self._speak_task.done():
             self._speak_task.cancel()
@@ -618,14 +655,33 @@ class CompanionManager(QObject):
     # TTS playback (async, fire-and-forget)
     # ------------------------------------------------------------------
 
-    async def _speak(self, text: str, generation: int | None = None) -> None:
-        """Speak text via TTS. State stays RESPONDING during playback."""
+    @staticmethod
+    async def _queue_chunks(queue: asyncio.Queue[str | None]) -> AsyncIterator[str]:
+        while (item := await queue.get()) is not None:
+            yield item
+
+    async def _speak(
+        self,
+        text: str,
+        generation: int | None = None,
+        *,
+        chunks: AsyncIterator[str] | None = None,
+    ) -> None:
+        """Speak text via TTS. State stays RESPONDING during playback.
+
+        With ``chunks`` the speech is streamed while the LLM is still answering
+        (state is still PROCESSING when the first sentence starts playing).
+        """
         generation = self._generation if generation is None else generation
         if generation != self._generation:
             return
+        live_states = (VoiceState.RESPONDING,)
+        if chunks is not None:
+            live_states = (VoiceState.RESPONDING, VoiceState.PROCESSING)
 
         def started():
-            if generation == self._generation and self._state == VoiceState.RESPONDING:
+            self._mark("first_audio")
+            if generation == self._generation and self._state in live_states:
                 self.speaking_changed.emit(True)
 
         def finished():
@@ -635,7 +691,10 @@ class CompanionManager(QObject):
         self._tts.playback_started.connect(started)
         self._tts.playback_finished.connect(finished)
         try:
-            await self._tts.speak(text)
+            if chunks is not None:
+                await self._tts.speak_stream(chunks)
+            else:
+                await self._tts.speak(text)
         except asyncio.CancelledError:
             logger.debug("TTS cancelled")
         except Exception as exc:  # noqa: BLE001
@@ -647,6 +706,7 @@ class CompanionManager(QObject):
             self._tts.playback_finished.disconnect(finished)
             if generation == self._generation:
                 self.speaking_changed.emit(False)
+                self._log_timings()
             # Only leave RESPONDING if this is still the current turn and we're
             # still in it (a new hotkey press or walkthrough click may have
             # already moved on).
@@ -676,6 +736,7 @@ class CompanionManager(QObject):
             await asyncio.sleep(0)
             if generation != self._generation:
                 return
+            self._marks = {"start": time.monotonic()}
 
             # Emit the final transcript so the UI can display it.
             self.final_transcript.emit(text)
@@ -700,9 +761,14 @@ class CompanionManager(QObject):
                     self._current_screenshots = screenshots
                 finally:
                     self._panel_visibility_controller.restore_after_capture()
+                self._mark("captured")
 
-                # Build image content blocks.
+                # Build image content blocks. The window list (~1 ms of Win32 calls,
+                # so inline is fine) rides in this request only, never in history.
                 image_blocks: list[dict[str, Any]] = []
+                windows_text = describe_windows()
+                if windows_text:
+                    image_blocks.append({"type": "text", "text": windows_text})
                 for screenshot in screenshots:
                     b64 = base64.b64encode(screenshot.jpeg_bytes).decode("ascii")
                     image_blocks.append({"type": "text", "text": screenshot.label})
@@ -761,14 +827,35 @@ class CompanionManager(QObject):
 
                 # Stay in PROCESSING (spinner) while the model answers, as the
                 # macOS app does; RESPONDING starts when there's something to say.
-                full_text = await self._llm.send(
-                    messages,
-                    system=system_prompt,
-                    model=self._current_model,
-                )
+                # If the TTS client can stream, start speaking finished
+                # sentences while the rest of the answer is still arriving.
+                if hasattr(self._tts, "speak_stream"):
+                    queue: asyncio.Queue[str | None] = asyncio.Queue()
+                    self._speech = (SpeechChunker(), queue)
+                    self._speak_task = asyncio.ensure_future(
+                        self._speak("", generation, chunks=self._queue_chunks(queue))
+                    )
+                try:
+                    full_text = await self._llm.send(
+                        messages,
+                        system=system_prompt,
+                        model=self._current_model,
+                    )
+                except BaseException:
+                    # Cancelled or failed mid-answer: drop any queued audio.
+                    if generation == self._generation and self._speech is not None:
+                        self._stop_speaking()
+                    raise
+                self._mark("llm_done")
 
             # Only commit to history and emit completion if not cancelled.
-            if not self._cancel_flag and generation == self._generation:
+            # Peek only: self._speech stays set until the queue is closed below,
+            # so the outer handlers can stop the speech if anything raises first.
+            speech = self._speech if generation == self._generation else None
+            if self._cancel_flag or generation != self._generation:
+                if speech is not None:
+                    self._stop_speaking()
+            else:
                 self.response_complete.emit(full_text)
                 self.success_turn_completed.emit()
 
@@ -813,18 +900,38 @@ class CompanionManager(QObject):
                             coords[0], coords[1], point_tag.label,
                         )
 
-                self._speak_task = asyncio.ensure_future(self._speak(spoken_text, generation))
+                if speech is not None:
+                    # Already speaking sentence by sentence: queue the tail and close.
+                    chunker, queue = speech
+                    for chunk in chunker.finish(full_text):
+                        queue.put_nowait(chunk)
+                    queue.put_nowait(None)
+                    self._speech = None
+                    if self._speak_task is not None and self._speak_task.done():
+                        # The speech already ended (e.g. a TTS error while the model
+                        # was still answering): finish the turn here instead.
+                        self.speaking_changed.emit(False)
+                        self._set_state(
+                            VoiceState.GUIDING if self._walkthrough is not None
+                            else VoiceState.IDLE
+                        )
+                else:
+                    self._speak_task = asyncio.ensure_future(self._speak(spoken_text, generation))
                 if self._memory is not None and local_reply is None and continuing_step is None:
                     await self._memory.learn_from_turn(text, spoken_text, source_id=str(uuid4()))
 
         except asyncio.CancelledError:
             logger.debug("turn cancelled")
             if generation == self._generation:
+                if self._speech is not None:
+                    self._stop_speaking()
                 self._set_state(VoiceState.IDLE)
 
         except Exception as exc:  # noqa: BLE001
             logger.error("turn pipeline error: %s", exc)
             if generation == self._generation:
+                if self._speech is not None:
+                    self._stop_speaking()
                 self._end_walkthrough()
                 self.error.emit(str(exc))
                 self._set_state(VoiceState.IDLE)
