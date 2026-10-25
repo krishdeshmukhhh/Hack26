@@ -101,7 +101,8 @@ class SessionSummaryWindow(QWidget):
         self.card.setTextFormat(Qt.TextFormat.PlainText)
         self.card.setAccessibleName("Session totals")
         layout.addWidget(self.card)
-        layout.addWidget(QLabel(REFLECTION_PROMPT))
+        self.reflection_label = QLabel(REFLECTION_PROMPT)
+        layout.addWidget(self.reflection_label)
         self.reflection = QLineEdit()
         self.reflection.setMaxLength(280)
         self.reflection.setAccessibleName("Reflection")
@@ -150,6 +151,7 @@ class SessionSummaryWindow(QWidget):
         layout.addLayout(actions)
         self.quiz.hide()
         runtime.session_ended.connect(self.show_summary)
+        runtime.review_requested.connect(self.show_review)
 
     # --- summary ----------------------------------------------------------------
 
@@ -158,12 +160,29 @@ class SessionSummaryWindow(QWidget):
         self.title.setText(f"Session done: {summary.goal}")
         self.card.setText("\n".join(summary_lines(summary)))
         self.reflection.setText(summary.reflection)
+        self._set_summary_visible(True)
         self.items, self.index, self.next_due = [], 0, None
         self.quiz.hide()
         self.next_review.setText("")
         self.show()
         self.raise_()
         self._spawn(self._load_reviews())
+
+    def show_review(self, items) -> None:
+        """Spaced review from earlier sessions, without a summary (section G)."""
+        if self.summary is not None or not items:
+            return
+        self.title.setText("Review from earlier sessions")
+        self._set_summary_visible(False)
+        self.next_due = None
+        self.next_review.setText("")
+        self.set_items(items, heading="Answer from memory first, then check.")
+        self.show()
+        self.raise_()
+
+    def _set_summary_visible(self, visible: bool) -> None:
+        for widget in (self.card, self.reflection_label, self.reflection):
+            widget.setVisible(visible)
 
     def _spawn(self, coro) -> None:
         try:
@@ -179,14 +198,15 @@ class SessionSummaryWindow(QWidget):
         items = await self.runtime.review_items()
         self.set_items(items)
 
-    def set_items(self, items) -> None:
+    def set_items(self, items, heading: str = "") -> None:
         self.items, self.index = list(items), 0
         if not self.items:
             self.quiz.hide()
             return
         count = len(self.items)
         self.quiz_heading.setText(
-            f"Quick review: {count} question{'s' if count != 1 else ''} on today's work."
+            heading
+            or f"Quick review: {count} question{'s' if count != 1 else ''} on today's work."
         )
         self.quiz.show()
         self._show_question()
@@ -263,6 +283,7 @@ class SessionSummaryWindow(QWidget):
 
     def dispose(self) -> None:
         self.runtime.session_ended.disconnect(self.show_summary)
+        self.runtime.review_requested.disconnect(self.show_review)
         for task in tuple(self._tasks):
             task.cancel()
         self.close()

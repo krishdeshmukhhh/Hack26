@@ -220,6 +220,17 @@ class BehaviorController:
         self._reaction_remaining = 0.0
         self.set_state("idle")
 
+    def play(self, action: str) -> bool:
+        """Play one clip now (e.g. "attentive", "sleep", "jump") if the pet has it.
+
+        Skipped under reduced motion. The clip ends on its own, or when the pet
+        moves or starts speaking, like any idle animation.
+        """
+        if self.settings.reduced_motion or action not in self.clips:
+            return False
+        self._start_optional(action)
+        return True
+
     def point_to(self, target: tuple[float, float]) -> None:
         self._clear_optional()
         self._point = target

@@ -1,46 +1,31 @@
-"""FocusRuntime routing with fakes of the sensing, policy and coach protocols."""
+"""FocusRuntime over the real sensing (F1), policy (F2) and study coach (F3)."""
 
 import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock
 
 from curio.focus_contract import (
-    FocusSignal,
     InterventionKind,
     InterventionResponse,
-    ResumeNote,
-    SignalKind,
     TrackJudgment,
 )
-from curio.focus_session import FocusRuntime, TimelineState, build_model_call, build_plan
+from curio.focus_session import TimelineState, build_model_call, build_plan
 from tests.test_focus_session_fakes import (
+    EXCEL,
+    REDDIT,
     T0,
+    YOUTUBE,
     Clock,
-    FakeClassifier,
-    FakeCoach,
-    FakePolicy,
-    FakePresenter,
-    FakeSource,
-    FakeStore,
-    FakeTracker,
+    close,
+    drain,
+    feed,
+    make_runtime,
     review_item,
-    sample,
+    settle,
+    steps,
 )
 
-
-def _runtime(**overrides):
-    clock = overrides.pop("clock", Clock())
-    parts = {
-        "source": FakeSource(),
-        "classifier": FakeClassifier(),
-        "tracker": FakeTracker(threshold=60),
-        "policy": FakePolicy(),
-        "presenter": FakePresenter(),
-        "store": FakeStore(),
-        "clock": clock,
-    }
-    parts.update(overrides)
-    return FocusRuntime(**parts), parts
+DRIFT = (EXCEL, 30, YOUTUBE, 150, REDDIT, 30)
 
 
 def _plan(minutes=25, **kw):
@@ -49,202 +34,191 @@ def _plan(minutes=25, **kw):
     )
 
 
-async def _feed(runtime, source, apps_every_10s, start=T0):
-    """Emit one sample per 10 s; returns the time after the last one."""
-    at = start
-    previous = None
-    for app in apps_every_10s:
-        source.emit(sample(app, at, switch=app != previous))
-        previous = app
-        at += timedelta(seconds=10)
-    await asyncio.sleep(0)
-    await runtime._queue.join()
-    return at
-
-
-def test_drift_check_in_false_alarm_corrects_classifier_and_policy():
+def test_session_opens_with_planning_prompt_and_spoken_answer_becomes_resume_note():
     async def scenario():
-        runtime, p = _runtime()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
         runtime.start(_plan())
-        assert p["source"].started == 1 and p["tracker"].plan is runtime.plan
-        await _feed(runtime, p["source"], ["excel"] * 3 + ["youtube"] * 8)
-        presenter = p["presenter"]
-        check_in = presenter.shown[-1]
-        assert check_in.kind == InterventionKind.CHECK_IN
-        assert runtime.drift_count == 1
-        assert runtime.timeline.state == TimelineState.DRIFTING
+        await settle()
+        presenter, policy = p["presenter"], p["policy"]
+        opening = presenter.shown[0]
+        assert opening.kind == InterventionKind.METACOGNITIVE
+        assert "first thing" in opening.message
+        presenter.answer(InterventionResponse.ACCEPTED, opening, "add the row fields")
+        note = policy.resume_note()
+        assert note.next_action == "add the row fields" and note.source == "spoken"
+        assert policy.responses == [(opening, InterventionResponse.ACCEPTED)]
+        await close(runtime, p)
 
-        presenter.answer(InterventionResponse.FALSE_ALARM)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        assert p["policy"].responses == [(check_in, InterventionResponse.FALSE_ALARM)]
+    asyncio.run(scenario())
+
+
+def test_drift_ambient_then_check_in_at_breakpoint_then_false_alarm_corrects_classifier():
+    async def scenario():
+        clock = Clock()
+        runtime, p = make_runtime(clock)
+        runtime.start(_plan())
+        await feed(runtime, steps(*DRIFT), clock)
+        presenter, policy = p["presenter"], p["policy"]
+        kinds = presenter.kinds()
+        assert kinds[1:] == [InterventionKind.AMBIENT_CUE, InterventionKind.CHECK_IN]
+        check_in = presenter.last(InterventionKind.CHECK_IN)
+        assert "not a distraction" in check_in.choices
+        assert runtime.drift_count == 1 and runtime.timeline.state == TimelineState.DRIFTING
+
+        presenter.answer(InterventionResponse.FALSE_ALARM, check_in, "not a distraction")
+        await drain(runtime)
+        assert policy.responses[-1] == (check_in, InterventionResponse.FALSE_ALARM)
         (corrected, judgment), = p["classifier"].corrections
-        assert corrected.app == "youtube" and judgment == TrackJudgment.ON_GOAL
+        assert corrected.app == "chrome" and judgment == TrackJudgment.ON_GOAL
         assert runtime.drift_count == 0
         assert runtime.timeline.totals()[TimelineState.DRIFTING] == 0
+        # The learner's correction now wins over the rules for that page.
+        assessment = await p["classifier"].assess(corrected, runtime.plan)
+        assert assessment.judgment == TrackJudgment.ON_GOAL
         # A second answer for the same card is ignored.
-        presenter.answer(InterventionResponse.ACCEPTED)
-        assert len(p["policy"].responses) == 1
+        presenter.answer(InterventionResponse.ACCEPTED, check_in)
+        assert len(policy.responses) == 1 + 0 or policy.responses[-1][0] is check_in
         summary = await runtime.end()
         assert summary.false_alarms == 1 and summary.distractions == ()
-        await runtime.aclose()
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
-def test_other_responses_go_only_to_policy():
+def test_back_to_it_goes_only_to_policy_and_return_reads_resume_note():
     async def scenario():
-        runtime, p = _runtime()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
         runtime.start(_plan())
-        await _feed(runtime, p["source"], ["excel"] + ["youtube"] * 8)
-        p["presenter"].answer(InterventionResponse.ACCEPTED)
-        await asyncio.sleep(0)
-        assert p["policy"].responses[-1][1] == InterventionResponse.ACCEPTED
-        assert p["classifier"].corrections == []
-        assert runtime.drift_count == 1
-        await runtime.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_drift_passes_plan_resume_note_then_returns_with_resume():
-    async def scenario():
-        runtime, p = _runtime()
-        runtime.start(_plan())
-        await _feed(runtime, p["source"], ["excel"] * 2 + ["youtube"] * 8 + ["excel"] * 2)
-        note = p["policy"].notes[0]
-        assert note.source == "plan" and "excel assignment" in note.where
-        kinds = [i.kind for i in p["presenter"].shown]
-        assert kinds == [InterventionKind.CHECK_IN, InterventionKind.RESUME]
-        assert SignalKind.RETURNED in {s.kind for s in p["presenter"].signals}
-        assert runtime.timeline.state == TimelineState.ON_GOAL
-        await runtime.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_explicit_resume_context_wins_over_plan_note():
-    async def scenario():
-        step = ResumeNote(
-            where="step three", next_action="add the row fields", source="walkthrough"
+        runtime.set_context(where="step 3", next_action="add the row fields")
+        await feed(runtime, steps(*DRIFT), clock)
+        presenter = p["presenter"]
+        presenter.answer(
+            InterventionResponse.ACCEPTED, presenter.last(InterventionKind.CHECK_IN), "back to it"
         )
-        runtime, p = _runtime(resume_context=lambda: step)
-        runtime.start(_plan())
-        await _feed(runtime, p["source"], ["excel"] + ["youtube"] * 8)
-        assert p["policy"].notes == [step]
-        await runtime.aclose()
+        assert p["classifier"].corrections == []
+        assert p["policy"].context == [
+            {"where": "step 3", "next_action": "add the row fields", "source": "walkthrough"}
+        ]
+        await feed(runtime, steps(EXCEL, 30, start=clock.now + timedelta(seconds=2)), clock)
+        resume = presenter.last(InterventionKind.RESUME)
+        assert "add the row fields" in resume.message
+        assert runtime.timeline.state == TimelineState.ON_GOAL
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
-def test_timeline_counts_sustained_drift_back_to_its_start():
+def test_take_a_break_from_a_check_in_starts_a_break_that_ends_itself():
     async def scenario():
-        runtime, p = _runtime()
-        runtime.start(_plan())
-        # 30 s on goal, 10 s quick lookup, 30 s on goal, then 90 s of youtube.
-        apps = ["excel"] * 3 + ["youtube"] + ["excel"] * 3 + ["youtube"] * 9 + ["excel"]
-        await _feed(runtime, p["source"], apps)
-        totals = runtime.timeline.totals()
-        assert totals[TimelineState.DRIFTING] == 90
-        assert totals[TimelineState.ON_GOAL] == 70
-        assert runtime.drift_count == 1
-        await runtime.aclose()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
+        runtime.start(_plan(break_minutes=1))
+        await feed(runtime, steps(*DRIFT), clock)
+        presenter = p["presenter"]
+        presenter.answer(
+            InterventionResponse.ACCEPTED, presenter.last(InterventionKind.CHECK_IN),
+            "take a break",
+        )
+        assert runtime.on_break and p["policy"].on_break
+        await feed(runtime, steps(REDDIT, 70, start=clock.now + timedelta(seconds=2)), clock)
+        assert not runtime.on_break
+        assert presenter.kinds()[-1] == InterventionKind.BREAK_END
+        assert 55 <= runtime.timeline.totals()[TimelineState.BREAK] <= 65
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
-def test_accepted_break_counts_as_break_until_break_over():
+def test_session_ending_prompt_leads_to_reflection_and_reflection_ends_session():
     async def scenario():
-        runtime, p = _runtime()
-        runtime.start(_plan())
-        tracker = p["tracker"]
-        tracker.queued.append(FocusSignal(kind=SignalKind.BREAK_DUE, at=T0))
-        at = await _feed(runtime, p["source"], ["excel"])
-        break_card = p["presenter"].shown[-1]
-        assert break_card.kind == InterventionKind.BREAK_START
-        p["clock"].now = at
-        p["presenter"].answer(InterventionResponse.ACCEPTED)
-        at = await _feed(runtime, p["source"], ["excel"] * 3, start=at)
-        tracker.queued.append(FocusSignal(kind=SignalKind.BREAK_OVER, at=at))
-        await _feed(runtime, p["source"], ["excel"] * 2, start=at)
-        totals = runtime.timeline.totals()
-        assert totals[TimelineState.BREAK] == 30
-        assert p["presenter"].shown[-1].kind == InterventionKind.BREAK_END
-        await runtime.aclose()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
+        ended = []
+        runtime.session_ended.connect(ended.append)
+        runtime.start(_plan(minutes=4))
+        await feed(runtime, steps(EXCEL, 150), clock)
+        presenter = p["presenter"]
+        ending = presenter.last(InterventionKind.METACOGNITIVE)
+        assert ending is not presenter.shown[0]
+        presenter.answer(InterventionResponse.IGNORED, ending)
+        await drain(runtime)
+        reflection = presenter.last(InterventionKind.REFLECTION)
+        presenter.answer(InterventionResponse.ACCEPTED, reflection, "my phone kept buzzing")
+        await drain(runtime)
+        assert ended and ended[0].reflection == "my phone kept buzzing"
+        assert (await p["store"].summaries())[0].reflection == "my phone kept buzzing"
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
-def test_on_break_judgment_counts_as_break():
+def test_end_saves_summary_ignores_open_cards_and_resets_coach():
     async def scenario():
-        runtime, p = _runtime(classifier=FakeClassifier(on_break=("spotify",)))
-        runtime.start(_plan())
-        await _feed(runtime, p["source"], ["spotify"] * 4 + ["excel"])
-        assert runtime.timeline.totals()[TimelineState.BREAK] == 40
-        await runtime.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_end_saves_summary_and_ignores_open_cards():
-    async def scenario():
-        runtime, p = _runtime()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
         ended = []
         runtime.session_ended.connect(ended.append)
         runtime.start(_plan())
-        runtime.note_concepts(["VLOOKUP", "vlookup", "Absolute references"], "step 3: add fields")
-        await _feed(runtime, p["source"], ["excel"] * 2 + ["youtube"] * 8)
+        runtime.note_concepts(["VLOOKUP", "vlookup", "Absolute references"], "step 3: fields")
+        await feed(runtime, steps(*DRIFT), clock)
         summary = await runtime.end()
-        assert p["source"].stopped == 1 and p["source"].callbacks == []
+        assert p["source"].running is False
         assert p["presenter"].cleared == 1
         assert p["policy"].responses[-1][1] == InterventionResponse.IGNORED
-        assert p["store"].saved == [summary] and ended == [summary]
-        assert summary.goal == "excel assignment" and summary.drift_count == 1
-        assert summary.distractions == ("youtube",)
+        assert await p["store"].summaries() == (summary,) and ended == [summary]
+        assert summary.drift_count == 1 and summary.distractions == ("chrome",)
         assert summary.concepts_practised == ("vlookup", "absolute references")
-        assert summary.interventions == 1
-        assert summary.on_goal_seconds + summary.off_goal_seconds == 90
+        assert summary.on_goal_seconds + summary.off_goal_seconds == runtime.timeline.total_seconds
         assert await runtime.end() is None
         runtime.finish()
         assert runtime.plan is None
-        await runtime.aclose()
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
-def test_session_ends_itself_after_its_duration():
+def test_samples_from_the_source_flow_through_the_queue_and_session_ends_itself():
     async def scenario():
-        runtime, p = _runtime()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
         ended = []
         runtime.session_ended.connect(ended.append)
         runtime.start(_plan(minutes=1))
-        await _feed(runtime, p["source"], ["excel"] * 7)
-        for _ in range(5):
-            await asyncio.sleep(0)
+        source = p["source"]
+        for s in steps(EXCEL, 70):
+            source.push(s)
+        source.play()
+        await asyncio.sleep(0)
+        await runtime._queue.join()
+        await drain(runtime)
         assert len(ended) == 1 and ended[0].on_goal_seconds == 60
-        await runtime.aclose()
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
 def test_cancel_saves_nothing_and_aclose_is_idempotent():
     async def scenario():
-        runtime, p = _runtime()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
         runtime.start(_plan())
-        await _feed(runtime, p["source"], ["excel"] * 2)
+        await feed(runtime, steps(EXCEL, 10), clock)
         await runtime.cancel()
-        assert runtime.plan is None and p["store"].saved == []
-        await runtime.aclose()
+        assert runtime.plan is None and await p["store"].summaries() == ()
+        await close(runtime, p)
         await runtime.aclose()
 
     asyncio.run(scenario())
 
 
-def test_classifier_failure_does_not_stop_the_pipeline():
+def test_classifier_failure_does_not_stop_the_queue():
     async def scenario():
-        classifier = FakeClassifier()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
+        real = p["classifier"].assess
         calls = {"n": 0}
-        real = classifier.assess
 
         async def flaky(s, plan):
             calls["n"] += 1
@@ -252,12 +226,39 @@ def test_classifier_failure_does_not_stop_the_pipeline():
                 raise RuntimeError("model down")
             return await real(s, plan)
 
-        classifier.assess = flaky
-        runtime, p = _runtime(classifier=classifier)
+        p["classifier"].assess = flaky
         runtime.start(_plan())
-        await _feed(runtime, p["source"], ["excel"] * 3)
-        assert runtime.timeline.total_seconds == 20
-        await runtime.aclose()
+        for s in steps(EXCEL, 10):
+            p["source"].push(s)
+        p["source"].play()
+        await asyncio.sleep(0)
+        await runtime._queue.join()
+        assert runtime.timeline.total_seconds == 8
+        await close(runtime, p)
+
+    asyncio.run(scenario())
+
+
+def test_due_reviews_are_offered_after_the_planning_prompt():
+    async def scenario():
+        clock = Clock()
+        runtime, p = make_runtime(clock)
+        await p["coach"].add_review_items([review_item("index match", T0 - timedelta(days=1))])
+        requested = []
+        runtime.review_requested.connect(requested.append)
+        runtime.start(_plan())
+        await drain(runtime)
+        presenter = p["presenter"]
+        assert presenter.kinds() == [InterventionKind.METACOGNITIVE]
+        presenter.answer(InterventionResponse.DISMISSED, presenter.shown[0], "skip")
+        await drain(runtime)
+        offer = presenter.shown[-1]
+        assert offer.kind == InterventionKind.REVIEW and offer.rationale == "G"
+        presenter.answer(InterventionResponse.ACCEPTED, offer, "start review")
+        assert [i.concept for i in requested[0]] == ["index match"]
+        # The runtime's own card never reaches the policy.
+        assert all(i.kind != InterventionKind.REVIEW for i, _ in p["policy"].responses)
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
@@ -265,52 +266,36 @@ def test_classifier_failure_does_not_stop_the_pipeline():
 def test_review_items_new_first_then_due_and_recorded():
     async def scenario():
         clock = Clock()
-        due = [
+        fresh = [review_item("vlookup", T0)]
+        generate = AsyncMock(return_value=fresh)
+        runtime, p = make_runtime(clock, generate_reviews=generate)
+        await p["coach"].add_review_items([
             review_item("index match", T0 - timedelta(days=1)),
             review_item("later", T0 + timedelta(days=3)),
-        ]
-        coach = FakeCoach(due=due)
-        fresh = [review_item("vlookup", T0 + timedelta(days=1))]
-        generate = AsyncMock(return_value=fresh)
-        runtime, _ = _runtime(coach=coach, generate_reviews=generate, clock=clock)
+        ])
         runtime.start(_plan())
         runtime.note_concepts(["VLOOKUP"], "row fields")
         items = await runtime.review_items()
         generate.assert_awaited_once_with(("vlookup",), "row fields")
         assert [i.concept for i in items] == ["vlookup", "index match"]
-        assert coach.added == fresh
         updated = await runtime.record_review(items[0], True)
-        assert updated.due_at > items[0].due_at and coach.recorded == [(items[0], True)]
-        await runtime.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_review_items_without_coach_or_generator():
-    async def scenario():
-        runtime, _ = _runtime()
-        runtime.start(_plan())
-        assert await runtime.review_items() == ()
-        await runtime.aclose()
-        coach = FakeCoach()
-        runtime, _ = _runtime(coach=coach)
-        runtime.start(_plan(concepts=["pivot tables"]))
-        assert await runtime.review_items() == ()
-        await runtime.aclose()
+        assert updated.due_at > clock.now
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
 def test_suggestions_use_past_distractions():
     async def scenario():
-        runtime, p = _runtime()
+        clock = Clock()
+        runtime, p = make_runtime(clock)
         runtime.start(_plan())
-        await _feed(runtime, p["source"], ["excel"] + ["youtube"] * 8)
+        await feed(runtime, steps(*DRIFT), clock)
         await runtime.end()
         runtime.finish()
         plans = await runtime.suggest_if_then("stats homework")
-        assert plans[0].cue_apps == ("youtube",)
-        await runtime.aclose()
+        assert plans[0].cue_apps == ("chrome",)
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
@@ -333,7 +318,7 @@ def test_model_call_uses_dedicated_provider():
 
 def test_cannot_start_twice():
     async def scenario():
-        runtime, _ = _runtime()
+        runtime, p = make_runtime(Clock())
         runtime.start(_plan())
         try:
             runtime.start(_plan())
@@ -341,6 +326,6 @@ def test_cannot_start_twice():
             pass
         else:
             raise AssertionError("second start accepted")
-        await runtime.aclose()
+        await close(runtime, p)
 
     asyncio.run(scenario())

@@ -120,6 +120,12 @@ class PetCompanionWidget(CompanionWidget):
         super().flash_error(message)
         self.controller.react("error")
 
+    def play_clip(self, action: str) -> bool:
+        """Play a named sprite clip; False with the triangle fallback or reduced motion."""
+        if self.catalog is None:
+            return False
+        return self.controller.play(action)
+
     def fly_to(self, x: int, y: int, *, hold: bool = False, step=None):
         if self.catalog is None:
             return super().fly_to(x, y, hold=hold, step=step)

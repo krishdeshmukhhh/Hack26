@@ -30,16 +30,20 @@ from curio.focus_session.rationale import why_text
 Cancel = Callable[[], None]
 # (seconds, callback) -> cancel. Injected so tests control expiry.
 Schedule = Callable[[float, Callable[[], None]], Cancel]
-Responder = Callable[[Intervention, InterventionResponse], None]
+# (intervention, response, reply): reply is the chosen label or the spoken answer.
+Responder = Callable[[Intervention, InterventionResponse, str], None]
 
 _FALSE_ALARM_RE = re.compile(
     r"not a distraction|wasn'?t a distraction|on task|it'?s for (work|study)"
 )
-_SNOOZE_RE = re.compile(r"snooze|later|not now|in a bit|give me|few minutes")
-_DISMISS_RE = re.compile(r"keep going|no thanks|dismiss|skip|i'?m fine|all good|not yet")
+_SNOOZE_RE = re.compile(r"snooze|later|not now|in a bit")
+_DISMISS_RE = re.compile(
+    r"keep going|few more minutes|no thanks|dismiss|skip|i'?m fine|all good|not yet"
+)
 _WORD_RE = re.compile(r"[a-z0-9']+")
 _FILLER = {"a", "an", "the", "to", "it", "i", "uh", "um", "please", "ok", "yeah"}
 DEFAULT_CHOICE = "okay"
+ANSWER_CHOICE = "answer"  # F2's metacognitive and reflection prompts
 
 
 def response_for_choice(choice: str) -> InterventionResponse:
@@ -95,11 +99,9 @@ class PetActions(Protocol):
 
 
 class PetWidgetActions:
-    """Drive ``PetCompanionWidget`` with clips it already has.
+    """Drive ``PetCompanionWidget.play_clip`` with clips every pet sheet has.
 
-    The behaviour controller has no public "play this clip" call yet, so this
-    uses ``_start_optional`` when present and does nothing otherwise (the
-    triangle fallback has no clips). Final wiring should add a public method.
+    The triangle fallback and reduced motion play nothing.
     """
 
     NAP_REPEAT_MS = 2500
@@ -111,10 +113,7 @@ class PetWidgetActions:
         self._nap.timeout.connect(lambda: self._play("sleep"))
 
     def _play(self, action: str) -> None:
-        controller = getattr(self._widget, "controller", None)
-        play = getattr(controller, "_start_optional", None)
-        if getattr(self._widget, "catalog", None) is not None and play is not None:
-            play(action)
+        self._widget.play_clip(action)
 
     def look_at_learner(self) -> None:
         self._play("attentive")
@@ -269,19 +268,27 @@ class FocusPresenter(QObject):
 
     def choose(self, choice: str) -> None:
         if self.current is not None:
-            self.resolve(response_for_choice(choice))
+            self.resolve(response_for_choice(choice), choice)
 
     def handle_spoken(self, text: str) -> bool:
-        """Route a push-to-talk reply to the open card; False if it isn't a choice."""
+        """Route a push-to-talk reply to the open card; False if it isn't for the card.
+
+        Prompts that ask for an answer (planning, reflection) take any reply
+        that isn't one of their other choices as the learner's answer.
+        """
         if self.current is None:
             return False
-        choice = match_spoken_choice(text, self.current.choices or (DEFAULT_CHOICE,))
-        if choice is None:
-            return False
-        self.choose(choice)
-        return True
+        choices = self.current.choices or (DEFAULT_CHOICE,)
+        choice = match_spoken_choice(text, choices)
+        if choice is not None and choice != ANSWER_CHOICE:
+            self.choose(choice)
+            return True
+        if ANSWER_CHOICE in choices and text.strip():
+            self.resolve(InterventionResponse.ACCEPTED, " ".join(text.split())[:280])
+            return True
+        return False
 
-    def resolve(self, response: InterventionResponse) -> None:
+    def resolve(self, response: InterventionResponse, reply: str = "") -> None:
         intervention, self.current = self.current, None
         if intervention is None:
             return
@@ -293,7 +300,7 @@ class FocusPresenter(QObject):
         ):
             self._pet_call("nap")
         if self._responder is not None:
-            self._responder(intervention, response)
+            self._responder(intervention, response, reply)
         self.resolved.emit(intervention, response.value)
 
     def signal(self, signal: FocusSignal) -> None:

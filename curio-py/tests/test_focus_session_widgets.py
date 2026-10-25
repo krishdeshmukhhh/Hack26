@@ -3,25 +3,25 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from curio.focus_contract import BreakStyle, IfThenPlan, InterventionResponse
-from curio.focus_session import FocusRuntime, SqliteSessionStore, build_plan
+from curio.focus_contract import BreakStyle, IfThenPlan, InterventionKind, InterventionResponse
+from curio.focus_session import SqliteSessionStore, build_plan
 from curio.focus_session.history_window import FocusHistoryWindow
+from curio.focus_session.presenter import FocusPresenter
 from curio.focus_session.session_window import FocusSessionWindow, minutes_text
 from curio.focus_session.start_panel import FocusStartPanel
 from curio.focus_session.summary_window import SessionSummaryWindow, next_review_text
 from curio.focus_session.timeline import TimelineState
 from tests.test_focus_session_fakes import (
+    EXCEL,
     T0,
+    YOUTUBE,
     Clock,
-    FakeClassifier,
-    FakeCoach,
-    FakePolicy,
-    FakePresenter,
-    FakeSource,
-    FakeStore,
-    FakeTracker,
+    close,
+    drain,
+    feed,
+    make_runtime,
     review_item,
-    sample,
+    steps,
 )
 
 
@@ -31,17 +31,8 @@ async def _settle():
 
 
 async def _idle(window):
-    if window._tasks:
+    while window._tasks:
         await asyncio.gather(*tuple(window._tasks))
-
-
-def _runtime(clock, **kw):
-    parts = dict(
-        source=FakeSource(), classifier=FakeClassifier(), tracker=FakeTracker(threshold=30),
-        policy=FakePolicy(), presenter=FakePresenter(), store=FakeStore(), clock=clock,
-    )
-    parts.update(kw)
-    return FocusRuntime(**parts), parts
 
 
 def test_start_panel_prefill_suggest_edit_and_start():
@@ -100,19 +91,17 @@ def test_start_panel_requires_goal_and_survives_failed_suggestion():
 def test_session_window_tracks_runtime():
     async def scenario():
         clock = Clock()
-        runtime, p = _runtime(clock)
+        runtime, p = make_runtime(clock)
         window = FocusSessionWindow(runtime, clock=clock)
-        runtime.start(build_plan(goal="excel assignment", minutes=25, now=T0))
+        runtime.start(
+            build_plan(goal="excel assignment", minutes=25, allowed_apps=["excel"], now=T0)
+        )
         assert window.isVisible() and window.goal.text() == "excel assignment"
-        at = T0
-        for app in ["excel"] * 3 + ["youtube"] * 5:
-            p["source"].emit(sample(app, at))
-            at += timedelta(seconds=60)
-        await _settle()
-        await runtime._queue.join()
+        await feed(runtime, steps(EXCEL, 180, YOUTUBE, 240), clock)
         spans = window.bar.spans()
         assert [s[0] for s in spans] == [TimelineState.ON_GOAL, TimelineState.DRIFTING]
-        assert abs(sum(s[2] for s in spans) - 7 / 25) < 1e-9
+        assert abs(sum(s[2] for s in spans) - 418 / 1500) < 1e-9
+        assert "on goal 3 min" in window.totals.text()
         assert "drifting 4 min" in window.totals.text()
         clock.now = T0 + timedelta(minutes=10)
         window._update_remaining()
@@ -121,7 +110,7 @@ def test_session_window_tracks_runtime():
         await runtime.end()
         assert not window.isVisible()
         window.dispose()
-        await runtime.aclose()
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
@@ -129,63 +118,82 @@ def test_session_window_tracks_runtime():
 def test_summary_window_quiz_reflection_and_next_review():
     async def scenario():
         clock = Clock()
-        items = [
+        runtime, p = make_runtime(clock)
+        await p["coach"].add_review_items([
             review_item("vlookup", T0, "what does the 4th VLOOKUP argument do?"),
             review_item("index match", T0),
-        ]
-        runtime, p = _runtime(clock, coach=FakeCoach(due=items))
+        ])
         spoken = []
         window = SessionSummaryWindow(runtime, speak=spoken.append, clock=clock)
-        runtime.start(build_plan(goal="excel assignment", minutes=25, now=T0))
-        p["source"].emit(sample("excel", T0))
-        p["source"].emit(sample("excel", T0 + timedelta(minutes=12)))
-        await _settle()
+        runtime.start(
+            build_plan(goal="excel assignment", minutes=25, allowed_apps=["excel"], now=T0)
+        )
+        await feed(runtime, steps(EXCEL, 722), clock)
         summary = await runtime.end()
-        await _settle()
+        await _idle(window)
         assert window.isVisible() and window.title.text() == "Session done: excel assignment"
         assert "On goal: 12 min" in window.card.text()
-        assert window.quiz.isVisible() and spoken == [items[0].question]
+        first, second = window.items
+        assert window.quiz.isVisible() and spoken == [first.question]
         assert not window.right_button.isEnabled()
         window.mark(True)  # can't mark before seeing the answer
-        assert window.index == 0 and runtime.coach.recorded == []
+        assert window.index == 0
         window.attempt.setText("exact match")
         window.reveal()
-        assert items[0].answer in window.answer.text()
+        assert first.answer in window.answer.text()
         window.mark(True)
-        await _settle()
-        assert window.index == 1 and spoken[-1] == items[1].question
+        await _idle(window)
+        assert window.index == 1 and spoken[-1] == second.question
         window.reveal()
         window.mark(False)
-        await _settle()
-        assert runtime.coach.recorded == [(items[0], True), (items[1], False)]
-        assert window.next_review.text() == "I'll ask you about index match again tomorrow."
+        await _idle(window)
+        assert window.next_review.text() in {
+            f"I'll ask you about {item.concept} again tomorrow." for item in (first, second)
+        }
+        assert await p["coach"].due_reviews(clock.now) == ()  # both rescheduled
         window.reflection.setText("  my   phone  ")
         done = []
         window.done.connect(done.append)
         window.finish()
-        await _settle()
+        await drain(runtime)
         assert done[0].reflection == "my phone"
-        assert p["store"].saved[-1].reflection == "my phone"
-        assert p["store"].saved[-1].plan_id == summary.plan_id and len(p["store"].saved) == 1
+        saved = await p["store"].summaries()
+        assert [(s.plan_id, s.reflection) for s in saved] == [(summary.plan_id, "my phone")]
         assert runtime.plan is None and not window.isVisible()
         window.dispose()
-        await runtime.aclose()
+        await close(runtime, p)
+
+    asyncio.run(scenario())
+
+
+def test_review_window_mode_for_due_reviews():
+    async def scenario():
+        runtime, p = make_runtime(Clock())
+        window = SessionSummaryWindow(runtime)
+        item = review_item("index match", T0 - timedelta(days=1))
+        runtime.review_requested.emit((item,))
+        assert window.isVisible() and not window.card.isVisible()
+        assert not window.reflection.isVisible() and window.items == [item]
+        window.close()
+        assert not window.isVisible()
+        window.dispose()
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
 
 def test_summary_without_reviews_hides_quiz():
     async def scenario():
-        runtime, _ = _runtime(Clock())
+        runtime, p = make_runtime(Clock())
         window = SessionSummaryWindow(runtime)
         runtime.start(build_plan(goal="essay", minutes=25, now=T0))
         await runtime.end()
-        await _settle()
+        await _idle(window)
         assert window.isVisible() and not window.quiz.isVisible()
         window.close()
         assert runtime.plan is None
         window.dispose()
-        await runtime.aclose()
+        await close(runtime, p)
 
     asyncio.run(scenario())
 
@@ -204,7 +212,7 @@ def test_next_review_text():
 def test_history_window_lists_and_deletes(tmp_path):
     async def scenario():
         async with SqliteSessionStore(tmp_path / "f.sqlite3") as store:
-            runtime, _ = _runtime(Clock(), store=store)
+            runtime, p = make_runtime(Clock(), store=store)
             runtime.start(build_plan(goal="stats homework", minutes=25, now=T0))
             summary = await runtime.end()
             answers = iter([False, True])
@@ -223,30 +231,24 @@ def test_history_window_lists_and_deletes(tmp_path):
             assert await store.summaries() == () and window.table.rowCount() == 0
             assert results == [("Load history", True), ("Delete history", True)]
             window.close()
-            await runtime.aclose()
+            p["store"] = None
+            await close(runtime, p)
 
     asyncio.run(scenario())
 
 
-def test_presenter_response_reaches_runtime_end_to_end():
-    """Real presenter + runtime: an unanswered check-in expires as IGNORED."""
-    from curio.focus_session.presenter import FocusPresenter
-
+def test_real_presenter_expiry_reaches_the_real_policy():
     async def scenario():
         fired = []
         presenter = FocusPresenter(schedule=lambda s, cb: fired.append(cb) or (lambda: None))
-        runtime, p = _runtime(Clock(), presenter=presenter)
+        runtime, p = make_runtime(Clock(), presenter=presenter)
         runtime.start(build_plan(goal="excel", minutes=25, now=T0))
-        at = T0
-        for app in ["excel"] + ["youtube"] * 5:
-            p["source"].emit(sample(app, at))
-            at += timedelta(seconds=10)
-        await _settle()
-        await runtime._queue.join()
-        assert presenter.current is not None
+        await drain(runtime)
+        assert presenter.current.kind == InterventionKind.METACOGNITIVE
         fired[-1]()
         assert p["policy"].responses[-1][1] == InterventionResponse.IGNORED
-        await runtime.aclose()
+        assert not presenter.bubble.isVisible()
+        await close(runtime, p)
         presenter.bubble.close()
 
     asyncio.run(scenario())

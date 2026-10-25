@@ -57,7 +57,8 @@ def _setup():
     spoken, responses = [], []
     schedule, pet = FakeSchedule(), FakePet()
     presenter = FocusPresenter(speak=spoken.append, pet=pet, schedule=schedule)
-    presenter.bind(lambda i, r: responses.append((i, r)))
+    presenter.replies = replies = []
+    presenter.bind(lambda i, r, reply: (responses.append((i, r)), replies.append(reply)))
     return presenter, spoken, responses, schedule, pet
 
 
@@ -153,6 +154,8 @@ def test_card_without_choices_gets_okay_and_clear_records_nothing():
         ("snooze 10 min", InterventionResponse.SNOOZED),
         ("not now", InterventionResponse.SNOOZED),
         ("keep going", InterventionResponse.DISMISSED),
+        ("a few more minutes", InterventionResponse.DISMISSED),
+        ("skip", InterventionResponse.DISMISSED),
     ],
 )
 def test_response_for_choice(choice, response):
@@ -165,32 +168,57 @@ def test_match_spoken_choice_prefers_longest_exact_phrase():
     assert match_spoken_choice("", CHOICES) is None
 
 
-def test_pet_widget_actions_degrade_without_clips():
-    class Widget:
-        catalog = None
-        controller = None
-
-    actions = PetWidgetActions(Widget())
-    for name in ("look_at_learner", "happy", "nap", "stretch", "wake"):
-        getattr(actions, name)()
-
+def test_pet_widget_actions_use_public_play_clip():
     played = []
 
-    class Controller:
-        def _start_optional(self, action):
+    class Widget:
+        def play_clip(self, action):
             played.append(action)
+            return True
 
-    class Pet:
-        catalog = object()
-        controller = Controller()
-
-    actions = PetWidgetActions(Pet())
+    actions = PetWidgetActions(Widget())
     actions.look_at_learner()
     actions.nap()
     assert actions._nap.isActive()
     actions.happy()
     assert not actions._nap.isActive()
-    assert played == ["attentive", "settle", "jump"]
+    actions.stretch()
+    assert played == ["attentive", "settle", "jump", "wake"]
+
+
+def test_behavior_controller_play_is_public_and_respects_reduced_motion():
+    from curio.pet_config import PetSettings
+    from curio.pets import BehaviorController
+    from curio.ui.pet_widget import PetCompanionWidget
+
+    controller = BehaviorController(PetSettings())
+    assert controller.play("attentive") and controller.action == "attentive"
+    assert not controller.play("no such clip")
+    calm = BehaviorController(PetSettings(reduced_motion=True))
+    assert not calm.play("attentive")
+
+    widget = PetCompanionWidget(settings=PetSettings())
+    try:
+        assert widget.play_clip("sleep") == (widget.catalog is not None)
+        widget.catalog = None
+        assert widget.play_clip("sleep") is False
+    finally:
+        widget.close()
+
+
+def test_answer_prompts_take_any_spoken_reply_but_skip_still_skips():
+    presenter, _, responses, _, _ = _setup()
+    card = _card(InterventionKind.METACOGNITIVE, choices=("answer", "skip"))
+    presenter.show(card)
+    assert presenter.handle_spoken("  open the   pivot table wizard ")
+    assert responses[-1] == (card, InterventionResponse.ACCEPTED)
+    assert presenter.replies[-1] == "open the pivot table wizard"
+    presenter.show(card)
+    assert presenter.handle_spoken("skip")
+    assert responses[-1] == (card, InterventionResponse.DISMISSED)
+    # Prompts without an "answer" choice don't swallow other speech.
+    presenter.show(_card())
+    assert not presenter.handle_spoken("how do I make a pivot table")
 
 
 def test_choice_bubble_smoke():
