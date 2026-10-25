@@ -1,4 +1,4 @@
-"""SQLite task map: verified paths from finished walkthroughs on this machine.
+"""SQLite task map: reported paths from finished walkthroughs on this machine.
 
 All SQLite work runs on one dedicated worker thread, never on the Qt event loop.
 Use ``async with SqliteTaskMap(path)`` or await ``close()`` at shutdown.
@@ -31,7 +31,7 @@ from curio.learning_contract import (
 from curio.task_map.difficulty import LocalDifficulty
 from curio.task_map.matching import MATCH_THRESHOLD, task_similarity
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 RECENT_WINDOW = timedelta(days=30)
 RECENT_WEIGHT = 2  # a verification inside RECENT_WINDOW counts this many times
 # A local path wins unless a shared one is more than this many times stronger.
@@ -54,11 +54,12 @@ def _ts(moment: datetime) -> str:
 
 
 def clean_steps(events: Sequence[StepEvent]) -> tuple[PathStep, ...]:
-    """Last SUCCEEDED attempt per step index, in index order, renumbered from 1."""
+    """Keep final reported-success attempts; never resurrect an older success."""
     kept: dict[int, StepEvent] = {}
     for event in events:
-        if event.outcome == StepOutcome.SUCCEEDED:
-            kept[event.step_index] = event
+        kept[event.step_index] = event
+    kept = {index: event for index, event in kept.items()
+            if event.outcome == StepOutcome.SUCCEEDED}
     return tuple(
         PathStep(
             index=n,
@@ -208,7 +209,10 @@ class SqliteTaskMap:
                     attempts INTEGER NOT NULL, stuck INTEGER NOT NULL,
                     PRIMARY KEY(app, task, step_index)
                 )""")
-                conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            if version < 2:
+                conn.execute("ALTER TABLE paths ADD COLUMN evidence_basis "
+                             "TEXT NOT NULL DEFAULT 'unknown'")
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
             conn.commit()
         except BaseException:
             conn.rollback()
@@ -264,12 +268,15 @@ class SqliteTaskMap:
                 source=source,
                 app_version=row["app_version"],
                 updated_at=datetime.fromisoformat(row["updated_at"]),
+                evidence_basis=row["evidence_basis"],
             )
             strength = row["recency"] if source == PathSource.LOCAL else row["verified_count"]
             rows.append(_Row(path=path, signature=row["signature"], strength=float(strength)))
         return rows
 
     def _record(self, conn: sqlite3.Connection, summary: WalkthroughSummary) -> TaskPath | None:
+        if summary.synthetic or any(event.synthetic for event in summary.steps):
+            return None  # Synthetic histories must not enter ordinary local guidance/stats.
         app, task = summary.app, task_key(summary.task)
         now = _ts(self._clock())
         try:
@@ -291,6 +298,9 @@ class SqliteTaskMap:
     def _reinforce(
         self, conn: sqlite3.Connection, summary: WalkthroughSummary, app: str, task: str, now: str
     ) -> TaskPath | None:
+        latest = {event.step_index: event for event in summary.steps}
+        if any(event.outcome != StepOutcome.SUCCEEDED for event in latest.values()):
+            return None  # Completion cannot override contradictory final attempts.
         steps = clean_steps(summary.steps)
         if not steps:
             return None
@@ -309,11 +319,14 @@ class SqliteTaskMap:
                 verified_count=row.path.verified_count + 1,
                 app_version=summary.app_version or row.path.app_version,
                 updated_at=datetime.fromisoformat(now),
+                evidence_basis=(row.path.evidence_basis
+                                if summary.completed_basis == "model_inferred" else "unknown"),
             )
             conn.execute(
-                "UPDATE paths SET steps = ?, verified_count = ?, app_version = ?, updated_at = ? "
-                "WHERE id = ?",
-                (_steps_to_json(steps), path.verified_count, path.app_version, now, path.id),
+                "UPDATE paths SET steps = ?, verified_count = ?, app_version = ?, updated_at = ?, "
+                "evidence_basis = ? WHERE id = ?",
+                (_steps_to_json(steps), path.verified_count, path.app_version, now,
+                 path.evidence_basis, path.id),
             )
         else:
             path = TaskPath(
@@ -322,10 +335,13 @@ class SqliteTaskMap:
                 steps=steps,
                 app_version=summary.app_version,
                 updated_at=datetime.fromisoformat(now),
+                evidence_basis=("model_reported" if summary.completed_basis == "model_inferred"
+                                else "unknown"),
             )
             conn.execute(
-                "INSERT INTO paths VALUES (?, ?, ?, 'local', ?, ?, 1, ?, ?)",
-                (path.id, app, task, sig, _steps_to_json(steps), path.app_version, now),
+                "INSERT INTO paths VALUES (?, ?, ?, 'local', ?, ?, 1, ?, ?, ?)",
+                (path.id, app, task, sig, _steps_to_json(steps), path.app_version, now,
+                 path.evidence_basis),
             )
         conn.execute("INSERT INTO verifications VALUES (?, ?)", (path.id, now))
         return path
@@ -375,20 +391,22 @@ class SqliteTaskMap:
                 )
                 sig, steps_json = signature(steps), _steps_to_json(steps)
                 existing = conn.execute(
-                    "SELECT id, steps, verified_count, app_version FROM paths "
+                    "SELECT id, steps, verified_count, app_version, evidence_basis FROM paths "
                     "WHERE source = 'shared' AND app = ? AND task = ? AND signature = ?",
                     (app, task, sig),
                 ).fetchone()
-                values = (steps_json, incoming.verified_count, incoming.app_version)
+                basis = ("model_reported" if incoming.evidence_basis == "model_reported"
+                         else "unknown")
+                values = (steps_json, incoming.verified_count, incoming.app_version, basis)
                 if existing is None:
                     conn.execute(
-                        "INSERT INTO paths VALUES (?, ?, ?, 'shared', ?, ?, ?, ?, ?)",
-                        (incoming.id, app, task, sig, *values, now),
+                        "INSERT INTO paths VALUES (?, ?, ?, 'shared', ?, ?, ?, ?, ?, ?)",
+                        (incoming.id, app, task, sig, *values[:3], now, basis),
                     )
                 elif tuple(existing)[1:] != values:
                     conn.execute(
                         "UPDATE paths SET steps = ?, verified_count = ?, app_version = ?, "
-                        "updated_at = ? WHERE id = ?",
+                        "evidence_basis = ?, updated_at = ? WHERE id = ?",
                         (*values, now, existing["id"]),
                     )
                 else:

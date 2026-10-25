@@ -22,7 +22,7 @@ from curio.learning_contract import (
     WalkthroughSummary,
 )
 from curio.skills.concepts import ConceptGraph
-from curio.skills.model import SqliteSkillModel, default_path
+from curio.skills.model import SqliteSkillModel
 
 A = AssistanceLevel
 O = StepOutcome  # noqa: E741
@@ -86,19 +86,20 @@ async def fill(path: Path, *, reset: bool = False, now: datetime | None = None) 
                 walkthrough_id=walkthrough_id, app=app, task=task, step_index=i,
                 instruction=text, assistance=assistance, outcome=outcome, concepts=concepts,
                 id=f"{walkthrough_id}-{i}", occurred_at=current[0],
+                synthetic=True,
             )
             for i, (text, concepts, assistance, outcome) in enumerate(steps, start=1)
         )
         await model.observe(WalkthroughSummary(
             walkthrough_id=walkthrough_id, app=app, task=task, steps=events,
-            completed=True, finished_at=current[0],
+            completed=True, finished_at=current[0], synthetic=True,
         ))
     current[0] = now
     return model
 
 
 async def report(model: SqliteSkillModel) -> None:
-    print(f"Skill model: {model.path}")
+    print(f"SIMULATED demo history — not observed user learning. Skill model: {model.path}")
     for state in await model.snapshot():
         bar = "#" * round(state.mastery * 20)
         print(f"  {state.concept:<20} {bar:<20} {state.mastery:4.0%}  "
@@ -132,7 +133,10 @@ def _show(model: SqliteSkillModel) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--path", type=Path, default=default_path(), help="skills.sqlite3 to fill")
+    parser.add_argument(
+        "--path", type=Path, default=Path("demo-skills.sqlite3"),
+        help="separate demo database to fill (default: demo-skills.sqlite3)",
+    )
     parser.add_argument("--reset", action="store_true", help="clear the model first")
     parser.add_argument("--show", action="store_true", help="open the skills window afterwards")
     args = parser.parse_args(argv)

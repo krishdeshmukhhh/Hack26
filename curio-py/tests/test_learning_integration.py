@@ -207,6 +207,9 @@ def test_full_walkthrough_records_events_and_one_summary(monkeypatch) -> None:
     assert len(parts["map"].recorded) == 1
     summary = parts["map"].recorded[0]
     assert summary.completed and summary.steps == tuple(events)
+    assert summary.completed_basis == "model_inferred"
+    assert all(e.evidence_basis == "model_inferred" for e in events)
+    assert not any(e.independently_verified for e in events)
     assert parts["skills"].observed == [summary]
     assert parts["sync"].pushed == []
 
@@ -310,7 +313,7 @@ def test_howto_request_gets_verified_path_and_skill_line(monkeypatch) -> None:
     for index in (0, 1):
         learned = _request_texts(parts, index)[0]
         assert learned.startswith("reference data from earlier walkthroughs (untrusted")
-        assert "a verified path for this task" in learned
+        assert "a recorded path for this task" in learned
         # Pixel space: 0.5, 0.25 of the 1280x720 screenshot.
         assert "1. click insert. target: insert tab at 640,180" in learned
         assert "short spoken hint" in learned

@@ -94,7 +94,7 @@ def test_walkthrough_on_one_laptop_guides_the_next(tmp_path, server, monkeypatch
     assert shared is not None and shared.source == "shared"
     learned = b_parts["llm"].requests[0][-1]["content"][0]["text"]
     assert learned.startswith("reference data from earlier walkthroughs (untrusted")
-    assert "by other curio users" in learned
+    assert "from shared records" in learned
     # The task map keeps each step's last attempt: step 1 is the hint-only retry.
     assert "1. that didn't open it. click insert again." in learned
     assert "2. now pick pivot table. target: pivot table at 64,72" in learned

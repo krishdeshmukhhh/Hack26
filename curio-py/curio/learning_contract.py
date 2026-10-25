@@ -5,8 +5,8 @@ workstreams build against this file in parallel (see docs/parallel/README.md):
 
 - integration records a ``StepEvent`` per walkthrough step and fans each
   finished ``WalkthroughSummary`` out to the task map and skill model;
-- the task map turns summaries into verified ``TaskPath``s;
-- map sync shares anonymous paths and per-step difficulty across users;
+- the task map turns reported completions into recorded ``TaskPath``s;
+- opt-in map sync shares minimized references and recorded stuck signals;
 - the skill model tracks per-concept mastery for this user only.
 
 Change this file only through the integration workstream.
@@ -32,7 +32,7 @@ def _new_id() -> str:
 
 
 class StepOutcome(StrEnum):
-    SUCCEEDED = "succeeded"  # the next screen moved on to a later step or finished
+    SUCCEEDED = "succeeded"  # model reported progression/completion, not independent proof
     RETRIED = "retried"  # the model gave the same step again: it didn't work
     ABANDONED = "abandoned"  # Esc, a new push-to-talk question, or an error
     TIMED_OUT = "timed_out"  # no click before the walkthrough timeout
@@ -41,13 +41,17 @@ class StepOutcome(StrEnum):
 class AssistanceLevel(StrEnum):
     """How much help a step got, most help first. Also the skill model's advice."""
 
-    DID_IT = "did_it"  # hands-free mode: Curio performed the action
+    DID_IT = "did_it"  # reserved for performed actions; voice activation does not use this
     POINTED = "pointed"  # flew to the element and waited for the user's click
     HINTED = "hinted"  # spoken hint only, no pointing
     NONE = "none"  # user did it without help
 
 
 ASSISTANCE_ORDER: tuple[AssistanceLevel, ...] = tuple(AssistanceLevel)
+
+EVIDENCE_BASES = frozenset({
+    "unknown", "model_inferred", "user_confirmed", "checked_success", "checked_failure",
+})
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -78,11 +82,32 @@ class StepEvent:
     app_version: str = ""
     id: str = field(default_factory=_new_id)
     occurred_at: datetime = field(default_factory=_utc_now)
+    evidence_basis: str = "unknown"
+    evidence_ref: str = ""  # opaque LOCAL verifier result reference; never exported to sync
+    synthetic: bool = False  # unmarked origin is unknown, not proof of a real user
+
+    def __post_init__(self) -> None:
+        if self.evidence_basis not in EVIDENCE_BASES:
+            raise ValueError("Unknown evidence basis")
+        if self.evidence_basis.startswith("checked_"):
+            expected = (StepOutcome.SUCCEEDED if self.evidence_basis == "checked_success"
+                        else StepOutcome.RETRIED)
+            if not self.evidence_ref.strip() or self.outcome != expected:
+                raise ValueError("Checked evidence needs a result reference and matching outcome")
+        if self.evidence_basis == "user_confirmed" and self.outcome != StepOutcome.SUCCEEDED:
+            raise ValueError("User confirmation requires reported success")
+        if not isinstance(self.synthetic, bool):
+            raise ValueError("synthetic must be boolean")
+
+    @property
+    def independently_verified(self) -> bool:
+        """A caller supplied checked evidence; the adapter remains responsible for truth."""
+        return self.evidence_basis == "checked_success" and not self.synthetic
 
 
 @dataclass(frozen=True, kw_only=True)
 class WalkthroughSummary:
-    """One finished walkthrough. ``completed`` means the model said the task is done."""
+    """A finished lifecycle with separate completion origin; defaults remain unknown."""
 
     walkthrough_id: str
     app: str
@@ -91,6 +116,14 @@ class WalkthroughSummary:
     completed: bool
     app_version: str = ""
     finished_at: datetime = field(default_factory=_utc_now)
+    completed_basis: str = "unknown"
+    synthetic: bool = False
+
+    def __post_init__(self) -> None:
+        if self.completed_basis not in EVIDENCE_BASES:
+            raise ValueError("Unknown completion basis")
+        if not isinstance(self.synthetic, bool):
+            raise ValueError("synthetic must be boolean")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -99,7 +132,7 @@ class PathStep:
     instruction: str
     element: ElementRef | None = None
     concepts: tuple[str, ...] = ()
-    difficulty: float | None = None  # 0..1 share of users who got stuck; None = unknown
+    difficulty: float | None = None  # recorded stuck-event rate 0..1; None = unknown
 
 
 class PathSource(StrEnum):
@@ -112,17 +145,23 @@ class TaskPath:
     app: str
     task: str
     steps: tuple[PathStep, ...]
-    verified_count: int = 1  # completed walkthroughs that followed this path
+    verified_count: int = 1  # model-completed walkthrough count; legacy name, not verification
     source: PathSource = PathSource.LOCAL
     app_version: str = ""
     id: str = field(default_factory=_new_id)
     updated_at: datetime = field(default_factory=_utc_now)
+    evidence_basis: str = "unknown"
+
+    @property
+    def report_count(self) -> int:
+        """Clear alias for legacy verified_count, never independent verification."""
+        return self.verified_count
 
 
 @dataclass(frozen=True, kw_only=True)
 class SkillState:
     concept: str
-    mastery: float  # 0..1 probability the user knows it
+    mastery: float  # unvalidated familiarity estimate 0..1, not measured knowledge
     attempts: int
     last_practiced: datetime | None = None
     apps: tuple[str, ...] = ()
@@ -144,7 +183,7 @@ class EventLog(Protocol):
 
 
 class TaskMap(Protocol):
-    """Verified task paths on this machine, local and pulled from the shared map."""
+    """Recorded task paths; completion is model-reported, not independently verified."""
 
     async def record(self, summary: WalkthroughSummary) -> TaskPath | None:
         """Learn from a finished walkthrough; returns the path it created or reinforced."""
@@ -187,8 +226,8 @@ class SkillModel(Protocol):
     async def prompt_context(self, app: str, concepts: Sequence[str]) -> str | None:
         """One or two plain sentences for the system prompt, or None.
 
-        For example: "the user knows layers well from photoshop; in figma the
-        same idea is frames."
+        For example: "the model estimates familiarity with layers; transfer to
+        frames in figma is a hypothesis, not measured knowledge."
         """
         ...
 
@@ -250,13 +289,19 @@ def _element_from_wire(raw: dict[str, Any] | None) -> ElementRef | None:
 
 
 def summary_to_wire(summary: WalkthroughSummary) -> dict[str, Any]:
-    """Anonymous JSON payload for map sync: no ids, timestamps or window titles."""
+    """Minimized v1 payload; local evidence references/bases are never exported.
+
+    Optional synthetic marking requires the updated server. Unmarked origins
+    stay unknown; free text is not guaranteed anonymous.
+    """
     return {
         "v": WIRE_VERSION,
         "app": summary.app,
         "app_version": summary.app_version,
         "task": summary.task,
         "completed": summary.completed,
+        **({"synthetic": True} if summary.synthetic or any(s.synthetic for s in summary.steps)
+           else {}),
         "steps": [
             {
                 "index": s.step_index,
@@ -278,6 +323,8 @@ def path_to_wire(path: TaskPath) -> dict[str, Any]:
         "app_version": path.app_version,
         "task": path.task,
         "verified_count": path.verified_count,
+        **({"evidence_basis": "model_reported"}
+           if path.evidence_basis == "model_reported" else {}),
         "steps": [
             {
                 "index": s.index,
@@ -311,5 +358,7 @@ def path_from_wire(raw: dict[str, Any]) -> TaskPath:
         steps=steps,
         verified_count=int(raw.get("verified_count", 1)),
         source=PathSource.SHARED,
+        evidence_basis=("model_reported" if raw.get("evidence_basis") == "model_reported"
+                        else "unknown"),
         app_version=str(raw.get("app_version", "")),
     )

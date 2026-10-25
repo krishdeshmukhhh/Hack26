@@ -81,8 +81,9 @@ class WalkthroughRecorder:
     def step_answered(self, step: PendingStep) -> StepEvent | None:
         """Record a new step answer; returns the previous step, now settled.
 
-        A later step index means the previous one worked; the same (or an
-        earlier) index means the model is repeating it because it didn't.
+        Index changes describe model-inferred progress or repetition only.
+        The legacy outcome is retained for API compatibility; provenance must
+        travel with it and must never be interpreted as an independent check.
         """
         settled = None
         if self._pending is not None:
@@ -96,24 +97,34 @@ class WalkthroughRecorder:
         return settled
 
     def finish(
-        self, outcome: StepOutcome, *, completed: bool
+        self, outcome: StepOutcome, *, completed: bool,
+        evidence_basis: str = "model_inferred", evidence_ref: str = "",
     ) -> tuple[StepEvent | None, WalkthroughSummary]:
         """Settle the pending step with ``outcome`` and summarise the walkthrough."""
-        settled = self._settle(outcome) if self._pending is not None else None
+        settled = (
+            self._settle(outcome, evidence_basis=evidence_basis, evidence_ref=evidence_ref)
+            if self._pending is not None else None
+        )
         summary = WalkthroughSummary(
             walkthrough_id=self.walkthrough_id,
             app=self.app,
             task=self.task,
             steps=tuple(self._events),
             completed=completed,
+            completed_basis=evidence_basis if completed else "unknown",
             app_version=self.app_version,
         )
         return settled, summary
 
-    def _settle(self, outcome: StepOutcome) -> StepEvent:
+    def _settle(
+        self, outcome: StepOutcome, *, evidence_basis: str = "model_inferred",
+        evidence_ref: str = "",
+    ) -> StepEvent:
         pending = self._pending
         assert pending is not None
         event = StepEvent(
+            evidence_basis=evidence_basis,
+            evidence_ref=evidence_ref,
             walkthrough_id=self.walkthrough_id,
             app=self.app,
             task=self.task,

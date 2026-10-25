@@ -1,5 +1,100 @@
 # Progress log
 
+## Updated four-worker handoffs integrated - 2026-10-24
+
+Preserved dirty readiness work and reviewed the four updated handoffs. See
+[integration review](readiness/integration-review.md). Shared StepEvent now owns
+evidence basis/local result reference/synthetic flag; the former subclass remains
+an alias. Summary completion origin is explicit; CompanionManager records model
+inference, never independent GUI checking. New path provenance and report_count
+alias retain legacy names/counts. Conservative migrations: event schema 3,
+task-path schema 2, skill schema 2. Historical estimates are not recalculated.
+
+Final failed attempts cannot reinforce paths. Marked synthetic summaries cannot
+reinforce ordinary local maps; updated normal sync excludes marked seed records.
+Skills demo markers/export and visible banner survive restart, including mixed
+histories. Old unmarked origin remains unknown. No local verifier references or
+checked bases are exported. Deploy updated server before using new seed extension;
+no deployment occurred. Exact supported math and tutorial confirmation are unchanged.
+
+Fresh coordinator results after integration:
+
+- `uv run pytest` with installed environment, unique basetemp/cache disabled:
+  **592 passed, 8 skipped, 9 subtests passed in 31.60s**, exit 0.
+- Separate root readiness suite: **11 passed in 3.32s**; scripted providers,
+  real persistence/loopback. Worker 99/174 counts overlap; do not sum them.
+- Full `uv run ruff check .`: **23 unchanged-file findings**, exit 1. Scoped
+  changed Python and new root scripts/tests pass configured Ruff.
+- Impact analyzer: **3 synthetic-fixture tests passed**; blank CSV reports zero
+  participants. No learner outcome experiments were performed.
+- `git diff --check` passed; 112 local Markdown links resolve. One demo script
+  was normalized from Windows-1252 to UTF-8.
+
+Worker native logs show **8 SAPI failures with access denied**; local model probe
+timed out. Coordinator rerendered/visually reviewed seeded Qt capture with explicit
+font/evidence banner: 25 devices discovered, **0 Qt TTS voices**. This is no proof
+of acoustic recognition, playback, live inference or physical UI operation.
+Corrected the obsolete no-startup-wiring claim in live-tutoring.md. No speech
+algorithm defect was demonstrated; machine permissions were not changed.
+
+Latest logs: [integrated pytest](presentation/validation/integrated-pytest.log),
+[root readiness](presentation/validation/integrated-readiness.log),
+[full Ruff](presentation/validation/integrated-ruff.log). Staging retry still failed
+creating `.git/index.lock`; **no new commit/merge**. Do not reapply the worker patch
+to the current working tree: those edits are already present, with further
+coordinator integration. No push, publication or submission occurred.
+
+Before judging: rehearse actual desktop speech/model/recovery/projector and
+packaged startup, capture a genuine backup recording, perform a consented learner
+session, and finish reviewed Git integration in a writable session. Detailed rubric
+descriptors and all human benefits remain unvalidated. Earlier entries below are
+historical; their test counts and initial provenance gaps are superseded above.
+
+## Hackathon readiness review - 2026-10-24
+
+Reviewed clean `main` baseline `integration snapshot`.
+All four handoffs were reviewed; see [readiness register](hackathon-readiness.md)
+and [presentation package](presentation/README.md). Four native detached
+worktrees exist at that commit. Requested readiness branches and integration
+commit are blocked by Git ref/index permissions. Integration is reviewed source
+changes in this checkout; no Git merges, push, publication or submission occurred.
+
+Evidence fixes: timeout no longer penalizes knowledge estimates; Skills labels
+estimated mastery/model-reported progress; task-map prompts qualify completion
+and recorded stuck rates; synthetic Skills demo defaults to a separate database
+and prints SIMULATED. Wire names remain compatible. Hands-free means voice input,
+not autonomous actions. Historical estimates are not migrated; shared records
+lack durable real-versus-synthetic provenance.
+
+Fresh final verification: Windows, Python 3.12.15 / PySide6 6.11.0:
+
+- `uv run pytest -p no:cacheprovider --basetemp <unique path> -q --tb=short`:
+  **581 passed, 8 skipped, 9 subtests passed in 30.55s**.
+- Separate root `tests/readiness/`: **6 passed in 0.24s**; real map client,
+  mocked transport, failure recovery and cancellation.
+- `uv run ruff check .`: **23 findings in unchanged files**, exit 1. No rules
+  weakened. Changed app Python files pass scoped Ruff from `curio-py`; new
+  root scripts/tests pass with explicit project configuration.
+- Offline preflight: **13 discovery/asset checks passed**, not startup/device
+  certification. Impact simulated self-test passed; blank CSV has no observations.
+- `git diff --check` passed. Logs: [validation](presentation/validation/).
+
+Normal uv resolution failed fetching hatchling due to restricted networking;
+final checks used installed dependencies via `UV_NO_SYNC=1`, workspace cache and
+absolute uv path. One integration run exposed a stale wording assertion; it was
+corrected and the full suite rerun. Two root demo lint issues were also corrected.
+No live model trials or human outcome experiments were performed.
+
+Open checks: actual microphone/speaker/model, wake/noisy-room behavior, desktop
+hotkey/escape/recovery, projector/DPI, two laptops/firewall, packaged startup,
+genuine backup recording and consented learner pilot. Audience and human benefit
+remain hypotheses. Detailed official rubric descriptors were not supplied.
+
+Entries below are historical counts from earlier commits/environments. The
+earlier laptop A/B test uses mocked model replies/clicks and a real loopback
+server, not physical laptops or human users. “Verified” means model-reported
+completion in the legacy task-map field, not independent task correctness.
+
 ## Walkthrough learning integrated - 2026-10-24
 
 The four parallel workstreams are merged into `feat/learning-integration`:

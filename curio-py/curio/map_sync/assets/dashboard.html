@@ -121,10 +121,11 @@
     <div class="kpis">
       <div class="kpi"><b id="k-walk">–</b><span>walkthroughs shared</span></div>
       <div class="kpi"><b id="k-tasks">–</b><span>tasks mapped</span></div>
-      <div class="kpi"><b id="k-done">–</b><span>finished the task</span></div>
+      <div class="kpi"><b id="k-done">–</b><span>model-reported completion</span></div>
     </div>
   </header>
 
+  <p id="provenance">Data origin unknown. Counts reflect reports, not verified outcomes.</p>
   <div class="grid">
     <section class="panel">
       <h2>Step-by-step stuck rate</h2>
@@ -133,7 +134,7 @@
       <div class="legend"><span>0%</span><span class="ramp" id="ramp"></span><span>60%+ stuck</span></div>
     </section>
     <aside class="panel">
-      <h2>Most confusing steps</h2>
+      <h2>Highest recorded stuck rates</h2>
       <ol class="confusing" id="confusing"></ol>
     </aside>
   </div>
@@ -247,6 +248,10 @@
 
   function render(stats) {
     if (!stats) return;
+    const origin = stats.provenance || {};
+    document.getElementById("provenance").textContent =
+      `${origin.synthetic || 0} synthetic demo records; ${origin.unknown || 0} records of unknown origin. ` +
+      "Completion is model-reported. Retries, timeouts and cancellations are stuck signals, not proven errors.";
     const apps = stats.apps || [];
     const tasks = apps.flatMap((a) => a.tasks);
     const walks = tasks.reduce((s, t) => s + t.walkthroughs, 0);
@@ -261,12 +266,12 @@
 
   function setLive(ok) {
     document.getElementById("live").classList.toggle("off", !ok);
-    document.getElementById("live-text").textContent = ok ? "Live from every Curio" : "Map server unreachable";
+    document.getElementById("live-text").textContent = ok ? "Connected to map server" : "Map server unreachable";
   }
 
   async function poll() {
     try {
-      const res = await fetch("/v1/stats", { cache: "no-store" });
+      const res = await fetch("/v1/stats?include_synthetic=1", { cache: "no-store" });
       if (!res.ok) throw new Error(res.status);
       const stats = await res.json();
       const changed = JSON.stringify(stats) !== JSON.stringify(lastStats);

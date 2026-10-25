@@ -1,5 +1,69 @@
 # Running Curio
 
+## Hackathon preflight and evidence
+
+See [readiness register](hackathon-readiness.md),
+[demo checklist](readiness/demo/preflight-and-fallback.md) and
+[presentation package](presentation/README.md). From repository root:
+
+```powershell
+curio-py/.venv/Scripts/python.exe scripts/readiness/demo/preflight.py
+curio-py/.venv/Scripts/python.exe scripts/readiness/impact/summarize.py --self-test
+```
+
+Preflight checks module/file discovery only, not Qt DLL loading, devices, live
+model or packaged startup. The impact self-test is simulated, not participant
+data. Root `tests/readiness/` is outside the Python app's default discovery; run
+it separately after the normal app suite:
+
+```powershell
+$readinessParent = Join-Path (Get-Location) 'curio-py/.readiness-tmp'
+New-Item -ItemType Directory -Force $readinessParent | Out-Null
+$readinessBase = Join-Path $readinessParent ([guid]::NewGuid().ToString('N'))
+curio-py/.venv/Scripts/python.exe -m pytest tests/readiness -q -p no:cacheprovider --basetemp "$readinessBase"
+curio-py/.venv/Scripts/python.exe -m ruff check tests/readiness scripts/readiness --config curio-py/pyproject.toml
+```
+
+Use an isolated demo server/data file for seeded maps. Skills demo now defaults
+to `demo-skills.sqlite3` in the working directory; its history is SIMULATED.
+Explicit `--path` can still select a personal database: choose a disposable path.
+New Skills demo rows retain synthetic markers and a visible warning after restart.
+Unmarked history retains unknown origin. Existing estimates are not recalculated
+to remove old timeout penalties.
+Do not present demo records as user outcomes or guaranteed anonymous data.
+
+The updated map server excludes marked synthetic records from ordinary paths
+and stats. Its dashboard explicitly includes them with synthetic/unknown counts.
+Update the server before using the new seeder; older strict servers reject the
+optional extension. Archive old demo data rather than assuming it is genuine.
+
+The current impact pilot uses [study-plan.md](readiness/impact/study-plan.md),
+`blank-results.csv` and `scripts/readiness/impact/analyze.py`. Earlier generic
+templates/analyzer are retained as drafts; do not mix their schemas. From root,
+run `curio-py/.venv/Scripts/python.exe -B scripts/readiness/impact/check_analysis.py`.
+
+Latest demo native checks: eight SAPI failures with access denied, zero Qt TTS
+voices and a timed-out localhost model probe. Device discovery does not establish
+working audio/model access. Rehearse outside the restricted process; check actual
+Windows speech/microphone permissions, English recognizer/voices and model/tunnel.
+No machine permissions were changed. See [integration review](readiness/integration-review.md).
+
+For restricted environments, run the requested app checks from `curio-py` with
+the installed environment only if it already has dependencies:
+
+```powershell
+$env:UV_NO_SYNC = '1'
+$env:UV_CACHE_DIR = Join-Path (Get-Location) '.uv-cache'
+New-Item -ItemType Directory -Force .readiness-tmp | Out-Null
+$readinessBase = Join-Path (Get-Location) ('.readiness-tmp/' + [guid]::NewGuid().ToString('N'))
+& "$env:USERPROFILE/.local/bin/uv.exe" run pytest -p no:cacheprovider --basetemp "$readinessBase"
+& "$env:USERPROFILE/.local/bin/uv.exe" run ruff check .
+```
+
+This avoids dependency resolution; it does not validate a fresh installation.
+Use ordinary `uv run` when dependencies and network permissions allow it. Full
+lint failures must be reported, not hidden by the scoped readiness check.
+
 ## Tutorial URL coach and live integral tutor
 
 Launch from `curio-py` with `.venv\Scripts\python.exe -m curio` as before.
@@ -167,9 +231,11 @@ immediately and persists across restarts. A triangle indicates asset-load fallba
 
 ### Walkthrough learning and the shared map
 
-On by default and local only. Guided walkthroughs are logged, finished ones
-become verified paths, and a per-concept skill model decides how much help
-to give. Tray menu > **Skills…** opens the skill map.
+On by default and local only. Guided walkthroughs are logged; model-reported
+completions become recorded paths. These are not independently verified task
+results. A per-concept model estimates appropriate help; mastery is not a
+knowledge test. Timeouts and cancellations do not update knowledge estimates.
+Tray menu > **Skills…** opens the skill map.
 
 ```toml
 [learning]

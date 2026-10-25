@@ -15,12 +15,14 @@ active `session` snapshot in subsequent calls, fresh request and work IDs, and
 explicit assistance levels. Assessments carry exact-verifier evidence attributed
 to the submitted work revision. Coaching replies never establish success.
 `cancel()` emits a terminal session event. The provider itself creates no tasks;
-capture tasks belong to the widget/host. This adapter supports active/cancelled
-sessions; pause/resume and application shutdown orchestration remain integration work.
+capture tasks belong to the widget/host. The adapter supports active/cancelled
+sessions; CoachingRuntime and CoachingWindow own application shutdown orchestration.
 
 Instantiate `curio.live_tutoring.TutoringService`, then import
 `TutoringWidget` from `curio.live_tutoring.widget` and embed it in a host window.
-Nothing is wired into application startup, CompanionManager, the tray, or config.
+The application already embeds it through CoachingWindow, connects voice routing
+through CoachingRuntime/CompanionManager, and exposes the tray entry. Configured
+provider callbacks supply questions/recognition; no separate tutor config is needed.
 
 Enter an **integrand**, rather than integral notation, for example
 `2*x*(x^2+1)^2`. Submit one equation at a time:
