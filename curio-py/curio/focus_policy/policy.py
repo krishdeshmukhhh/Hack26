@@ -140,7 +140,9 @@ class AdaptiveFocusPolicy:
     # --- FocusPolicy -------------------------------------------------------------
 
     def decide(self, signal: FocusSignal, plan: FocusPlan) -> Intervention | None:
-        if plan.id != self._plan_id:
+        if self._plan_id is None:
+            self._plan, self._plan_id = plan, plan.id  # keep context set before the first signal
+        elif plan.id != self._plan_id:
             self._reset_session(plan)
         now = self._clock()
         self._update_episode_app(signal)
@@ -321,9 +323,8 @@ class AdaptiveFocusPolicy:
         note = self._note
         if episode is None or episode.false_alarm or self._on_break or note is None:
             return None
-        if note is self._last_read_note or self._quiet(now):
+        if self._quiet(now):
             return None
-        self._last_read_note = note
         return self._emit(self._intervention(InterventionKind.RESUME, plan, now), app=episode.app)
 
     # --- Resume notes ------------------------------------------------------------
@@ -366,7 +367,6 @@ class AdaptiveFocusPolicy:
             return None
         if self._note is None:
             self._capture_resume_note(plan, now)
-        self._last_read_note = self._note
         return self._emit(self._intervention(InterventionKind.BREAK_END, plan, now))
 
     # --- Metacognitive prompts ---------------------------------------------------
@@ -493,4 +493,3 @@ class AdaptiveFocusPolicy:
         self._ending_done = False
         self._context: ResumeNote | None = None
         self._note: ResumeNote | None = None
-        self._last_read_note: ResumeNote | None = None
