@@ -36,6 +36,9 @@ class TrayIcon(QSystemTrayIcon):
     share_walkthroughs_toggled = Signal(bool)
     open_stuck_map_requested = Signal()
     hands_free_toggled = Signal(bool)
+    start_focus_requested = Signal()
+    end_focus_requested = Signal()
+    show_focus_history_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -69,6 +72,18 @@ class TrayIcon(QSystemTrayIcon):
         memory_action = QAction("Memories", menu)
         memory_action.triggered.connect(self.show_memory_requested.emit)
         menu.addAction(memory_action)
+
+        # Focus/study sessions; hidden until the app enables them ([focus] enabled).
+        self._start_focus_action = QAction("Start focus session…", menu)
+        self._start_focus_action.triggered.connect(self.start_focus_requested.emit)
+        menu.addAction(self._start_focus_action)
+        self._end_focus_action = QAction("End focus session", menu)
+        self._end_focus_action.triggered.connect(self.end_focus_requested.emit)
+        menu.addAction(self._end_focus_action)
+        self._focus_history_action = QAction("Focus history…", menu)
+        self._focus_history_action.triggered.connect(self.show_focus_history_requested.emit)
+        menu.addAction(self._focus_history_action)
+        self.set_focus_available(False)
 
         skills_action = QAction("Skills…", menu)
         skills_action.triggered.connect(self.show_skills_requested.emit)
@@ -157,6 +172,18 @@ class TrayIcon(QSystemTrayIcon):
         blocked = self._share_action.blockSignals(True)
         self._share_action.setChecked(enabled)
         self._share_action.blockSignals(blocked)
+
+    def set_focus_available(self, available: bool) -> None:
+        self._start_focus_action.setVisible(available)
+        self._focus_history_action.setVisible(available)
+        self._end_focus_action.setVisible(False)
+
+    def set_focus_active(self, active: bool) -> None:
+        """Swap "Start" for "End" while a session runs."""
+        if not self._focus_history_action.isVisible():
+            return
+        self._start_focus_action.setVisible(not active)
+        self._end_focus_action.setVisible(active)
 
     def set_learning_available(self, available: bool, *, map_server: bool = False) -> None:
         self._share_action.setEnabled(available)

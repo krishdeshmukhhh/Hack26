@@ -74,10 +74,19 @@ class FocusStartPanel(QWidget):
         suggest: Suggest | None = None,
         foreground_app: Callable[[], str] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        study_minutes: int = 25,
+        break_minutes: int = 5,
+        break_style: BreakStyle = BreakStyle.FIXED,
+        strict: bool = False,
         parent=None,
     ):
+        """Defaults come from ``[focus]``; every session starts from them."""
         super().__init__(parent)
         self._suggest = suggest
+        self._study_minutes = study_minutes
+        self._break_minutes = break_minutes
+        self._default_style = BreakStyle(break_style)
+        self._default_strict = strict
         self._foreground_app = foreground_app
         self._clock = clock
         self._tasks: set[asyncio.Task] = set()
@@ -103,7 +112,9 @@ class FocusStartPanel(QWidget):
         self.minutes.setAccessibleName("Duration")
         form.addRow("For how long?", self.minutes)
         self.break_style = QComboBox()
-        self.break_style.addItem("Fixed breaks (25/5)", BreakStyle.FIXED)
+        self.break_style.addItem(
+            f"Fixed breaks ({study_minutes}/{break_minutes})", BreakStyle.FIXED
+        )
         self.break_style.addItem("Suggest breaks when I've gone a while", BreakStyle.SELF_PACED)
         self.break_style.addItem("No breaks", BreakStyle.NONE)
         self.break_style.setAccessibleName("Break style")
@@ -151,8 +162,8 @@ class FocusStartPanel(QWidget):
         """Fresh form for a new session; suggests plans when there's a goal."""
         self.goal.setText(goal)
         self.minutes.setValue(minutes or DEFAULT_MINUTES)
-        self.break_style.setCurrentIndex(0)
-        self.strict.setChecked(False)
+        self.break_style.setCurrentIndex(self.break_style.findData(self._default_style))
+        self.strict.setChecked(self._default_strict)
         current = ""
         if self._foreground_app is not None:
             try:
@@ -231,6 +242,8 @@ class FocusStartPanel(QWidget):
                 allowed_apps=split_apps(self.allowed.text()),
                 break_style=self.break_style.currentData(),
                 strict=self.strict.isChecked(),
+                study_minutes=self._study_minutes,
+                break_minutes=self._break_minutes,
                 now=self._clock(),
             )
         except ValueError as exc:

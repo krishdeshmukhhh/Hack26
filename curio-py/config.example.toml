@@ -93,3 +93,25 @@ sync_url = ""
 # the model (screen recordings still show it).
 spotlight = true
 spotlight_dim = 0.35            # 0-0.8; how dark the rest of the screen gets (0 = ring only)
+
+# Focus/study sessions: tray menu > "Start focus session…", or say "Curio,
+# I'm doing my Excel assignment for 25 minutes". While a session runs, Curio
+# reads the foreground app, window title and idle time every few seconds (never
+# keystrokes or screenshots), checks in at natural pauses with choices rather
+# than orders, and gives hints before answers. Summaries, your "not a
+# distraction" corrections and review questions stay on this PC; tray menu >
+# "Focus history…" shows and deletes them.
+[focus]
+enabled = true
+study_minutes = 25              # fixed study/break rhythm
+break_minutes = 5
+break_style = "fixed"           # fixed, self_paced or none (start panel default)
+strict = false                  # check in more persistently; never blocks anything
+max_check_ins_per_hour = 3      # spoken check-ins; the pet's glances don't count
+snooze_minutes = 10
+quiet_hours = []                # e.g. [["22:00", "07:00"]] in local time
+# Ask the model about window titles the rules can't judge (e.g. "Chrome - New
+# Tab"). false = rules and your own corrections only; titles never leave the PC.
+model_judgments = true
+sample_seconds = 2.0
+drift_after_seconds = 90        # sustained off-goal time before Curio notices

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import qasync
 from platformdirs import user_config_dir, user_log_dir
-from PySide6.QtCore import QEvent, QUrl
+from PySide6.QtCore import QEvent, QSettings, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
@@ -31,6 +31,7 @@ from curio.clients.whisper_transcription_client import WhisperTranscriptionClien
 from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.companion_manager import CompanionManager
 from curio.config import Config, ConfigError, save_share_walkthroughs
+from curio.focus_session.wiring import build_focus_mode
 from curio.hands_free import HandsFreeController
 from curio.hotkey import HotkeyMonitor
 from curio.learning_events import (
@@ -95,6 +96,35 @@ def _build_learning(config: Config) -> LearningServices | None:
         map_sync=map_sync,
         share_walkthroughs=config.learning.share_walkthroughs,
     )
+
+
+FOCUS_SEEN_VARIANTS_KEY = "focus/seen_variants"
+
+
+def _build_focus(config: Config, manager, companion, learning, memory_runtime):
+    """Focus/study sessions with their own LLM client, speaking through the manager."""
+    seen = QSettings(APP_NAME, APP_NAME).value(FOCUS_SEEN_VARIANTS_KEY, [])
+    seen = [seen] if isinstance(seen, str) else list(seen or [])
+    frequency = None
+    if config.memory.enabled and memory_runtime is not None:
+
+        async def frequency():
+            # The memory system's adaptive interaction.frequency preference (0..1).
+            records = await memory_runtime.snapshot()
+            return memory_runtime.engine.adaptive_values(records).interruption_frequency
+
+    focus = build_focus_mode(
+        config.focus,
+        llm=_configured_llm(config),
+        model=config.default_model,
+        speak=manager.say,
+        pet_widget=companion,
+        learning=learning,
+        interaction_frequency=frequency,
+        seen_variants=seen,
+    )
+    manager.attach_focus(focus.integration)
+    return focus
 
 
 @dataclass
@@ -220,6 +250,7 @@ def run() -> int:
     hands_free = None
     coaching_runtime = None
     coaching_window = None
+    focus = None
     if result.config is not None:
         memory_runtime = MemoryRuntime(result.config.memory, config_path=result.config_path)
         memory_window = MemoryWindow(
@@ -332,6 +363,16 @@ def run() -> int:
         tray_icon.assistant_requested.connect(coaching_runtime.stop_session)
         result.app.aboutToQuit.connect(coaching_runtime.interrupt)
 
+        if result.config.focus.enabled:
+            focus = _build_focus(result.config, manager, companion, learning, memory_runtime)
+            tray_icon.set_focus_available(True)
+            tray_icon.start_focus_requested.connect(focus.open_start)
+            tray_icon.end_focus_requested.connect(focus.runtime.request_end)
+            tray_icon.show_focus_history_requested.connect(focus.show_history)
+            focus.runtime.session_started.connect(lambda _plan: tray_icon.set_focus_active(True))
+            focus.runtime.session_ended.connect(lambda _sum: tray_icon.set_focus_active(False))
+            focus.runtime.error.connect(companion.show_error)
+
         # State → companion
         manager.state_changed.connect(companion.set_state)
         manager.response_delta.connect(companion.text_started)
@@ -409,6 +450,12 @@ def run() -> int:
         if hands_free is not None:
             hands_free.close()
         mic.stop()
+        if focus is not None:
+            manager.attach_focus(None)
+            QSettings(APP_NAME, APP_NAME).setValue(
+                FOCUS_SEEN_VARIANTS_KEY, sorted(focus.policy.seen_variants)
+            )
+            loop.run_until_complete(focus.aclose())
         if learning is not None:
             if skills_window is not None:
                 skills_window.close()

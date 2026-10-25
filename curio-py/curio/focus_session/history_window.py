@@ -8,7 +8,7 @@ keeps about focus sessions, so "Delete all" really empties it.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -50,7 +50,8 @@ def _ask(parent: QWidget) -> bool:
         QMessageBox.question(
             parent,
             "Delete all focus history?",
-            "Permanently delete every saved focus session summary? This cannot be undone.",
+            "Permanently delete every saved focus session summary, your \"not a distraction\" "
+            "corrections and your review questions? This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -67,10 +68,13 @@ class FocusHistoryWindow(QWidget):
         store: SessionStore,
         *,
         confirm: Callable[[QWidget], bool] = _ask,
+        clear_extra: Sequence[Callable[[], Awaitable[object]]] = (),
         parent=None,
     ):
+        """``clear_extra``: other focus data cleared by "Delete all" (corrections, reviews)."""
         super().__init__(parent)
         self._store = store
+        self._clear_extra = tuple(clear_extra)
         self._confirm = confirm
         self._tasks: set[asyncio.Task] = set()
         self._busy = False
@@ -86,7 +90,7 @@ class FocusHistoryWindow(QWidget):
         layout = QVBoxLayout(self)
         note = QLabel(
             "Session summaries stay on this computer. Window titles and activity samples "
-            "aren't kept here."
+            "aren't kept. Delete all also removes your corrections and review questions."
         )
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {DS.Colors.text_secondary};")
@@ -168,6 +172,8 @@ class FocusHistoryWindow(QWidget):
 
         async def work() -> str:
             await self._store.clear()
+            for clear in self._clear_extra:
+                await clear()
             await self._fetch()
             return "Focus history deleted."
 
