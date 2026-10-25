@@ -577,8 +577,8 @@ class CompanionManager(QObject):
     def _step_assistance(self, point_tag: PointTag | None) -> AssistanceLevel:
         """How much help this step's answer gave.
 
-        Hook for the hands-free mode: when Curio performs the step itself it
-        should report ``AssistanceLevel.DID_IT`` here.
+        Hands-free voice activation still leaves actions to the user. DID_IT is
+        reserved for a future action executor and is never inferred from input mode.
         """
         return AssistanceLevel.POINTED if point_tag is not None else AssistanceLevel.HINTED
 
@@ -618,7 +618,11 @@ class CompanionManager(QObject):
         recording, self._recording = self._recording, None
         if recording is None or self._learning is None:
             return
-        settled, summary = recording.finish(outcome, completed=completed)
+        # STEP/DONE is model output, never a user confirmation or verifier.
+        settled, summary = recording.finish(
+            outcome, completed=completed,
+            evidence_basis="model_inferred" if completed else "unknown",
+        )
         if settled is not None:
             self._learning.record_step(settled)
         self._learning.finish_walkthrough(summary)
@@ -626,7 +630,7 @@ class CompanionManager(QObject):
     async def _learning_prompt(
         self, text: str, window_title: str, continuing_step: int | None
     ) -> str | None:
-        """Verified path and skill advice for how-to requests; None otherwise."""
+        """Recorded path and estimated skill advice for how-to requests; None otherwise."""
         if self._learning is None:
             return None
         recording = self._recording

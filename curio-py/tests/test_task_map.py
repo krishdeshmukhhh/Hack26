@@ -370,7 +370,8 @@ def _prompt_path(difficulty=None):
 def test_format_norm1000():
     text = format_for_prompt(_prompt_path(), "norm1000", None)
     assert text == text.lower()
-    assert "followed to the end 3 times on this computer" in text
+    assert "model-reported completion 3 times on this computer" in text
+    assert "completion is not independently verified" in text
     assert "1. click the insert tab. target: insert tab at 120,45" in text
     assert "2. click pivottable. target: pivottable at 500,250" in text
     assert "3. press ok" in text
@@ -391,13 +392,14 @@ def test_format_pixel_without_size_omits_positions():
 def test_format_marks_hard_steps():
     text = format_for_prompt(_prompt_path(difficulty=0.6), "norm1000", None)
     lines = text.splitlines()
-    assert "most people get stuck here" in lines[2]
+    assert "recorded stuck-event rate: 60%" in lines[2]
+    assert "not a unique-user or validated failure rate" in lines[2]
     assert "stuck" not in lines[1]
 
 
 def test_format_shared_and_unknown_coords():
     path = shared_path("insert", verified=1)
-    assert "followed to the end once by other curio users" in format_for_prompt(
+    assert "model-reported completion once from shared records" in format_for_prompt(
         path, "norm1000", None
     )
     with pytest.raises(ValueError):

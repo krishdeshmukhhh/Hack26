@@ -1,9 +1,15 @@
 # Map sync: the shared "where people get stuck" map
 
-Every finished walkthrough can be shared, anonymously and opt-in, with a small
-map server. The server merges them into verified paths that any Curio can
-pull, works out how often people get stuck at each step, and shows that on a
-live dashboard.
+Walkthrough reports can be shared opt-in with a small map server. It aggregates
+model-reported paths and stuck signals, not verified outcomes or distinct people.
+Free text is not guaranteed anonymous even though IDs/window titles are omitted.
+
+New seed posts carry synthetic=true. Default paths/stats exclude marked records;
+dashboard polls `/v1/stats?include_synthetic=1` with synthetic/unknown counts.
+Unmarked old records have unknown origin. Update the server before running the
+new seeder; older strict servers reject the extension. No deployment occurred.
+Local verifier references are never exported. Returned path evidence is only
+model-reported/unknown. Contradictory final attempts cannot reinforce a path.
 
 Code lives in `curio-py/curio/map_sync/`:
 

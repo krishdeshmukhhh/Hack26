@@ -13,10 +13,11 @@ from platformdirs import user_data_path
 
 from curio.learning_contract import AssistanceLevel, ElementRef, StepEvent, StepOutcome
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 3
 _COLUMNS = (
     "id, walkthrough_id, app, task, step_index, instruction, assistance, outcome, "
-    "element_label, element_x, element_y, element_window, concepts, app_version, occurred_at"
+    "element_label, element_x, element_y, element_window, concepts, app_version, occurred_at, "
+    "evidence_basis, evidence_ref, synthetic"
 )
 
 
@@ -42,6 +43,9 @@ def _row(event: StepEvent) -> tuple:
         json.dumps(list(event.concepts)),
         event.app_version,
         event.occurred_at.isoformat(),
+        getattr(event, "evidence_basis", "unknown"),
+        getattr(event, "evidence_ref", ""),
+        int(event.synthetic),
     )
 
 
@@ -55,6 +59,8 @@ def _event(row: sqlite3.Row) -> StepEvent:
             window_title=row["element_window"] or "",
         )
     return StepEvent(
+        evidence_basis=row["evidence_basis"], evidence_ref=row["evidence_ref"],
+        synthetic=bool(row["synthetic"]),
         id=row["id"],
         walkthrough_id=row["walkthrough_id"],
         app=row["app"],
@@ -87,6 +93,7 @@ class SqliteEventLog:
         conn = sqlite3.connect(str(self._path), timeout=2.0)
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute("BEGIN IMMEDIATE")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version > _SCHEMA_VERSION:
                 raise OSError("Unsupported learning event database schema version")
@@ -113,8 +120,16 @@ class SqliteEventLog:
                     "CREATE INDEX IF NOT EXISTS step_events_recent "
                     "ON step_events(occurred_at)"
                 )
-                conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-                conn.commit()
+            if version < 2:
+                conn.execute("ALTER TABLE step_events ADD COLUMN evidence_basis "
+                             "TEXT NOT NULL DEFAULT 'unknown'")
+                conn.execute("ALTER TABLE step_events ADD COLUMN evidence_ref "
+                             "TEXT NOT NULL DEFAULT ''")
+            if version < 3:
+                conn.execute("ALTER TABLE step_events ADD COLUMN synthetic "
+                             "INTEGER NOT NULL DEFAULT 0")
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            conn.commit()
         except BaseException:
             conn.close()
             raise
@@ -135,7 +150,7 @@ class SqliteEventLog:
     @staticmethod
     def _append(conn: sqlite3.Connection, event: StepEvent) -> None:
         conn.execute(
-            f"INSERT INTO step_events ({_COLUMNS}) VALUES ({', '.join('?' * 15)})",
+            f"INSERT INTO step_events ({_COLUMNS}) VALUES ({', '.join('?' * 18)})",
             _row(event),
         )
 

@@ -5,7 +5,7 @@ and the evidence behind it is stored, visible in the skills window, and
 resettable. All SQLite work runs in ``asyncio.to_thread`` with a short-lived
 connection per call, so the Qt event loop never blocks on disk.
 
-Mastery is a probability the user knows a concept. Each step's outcome is
+Mastery is an unvalidated familiarity estimate. Each reported step's outcome is
 evidence, weighted by how much help the step got (watching isn't doing) and,
 when the crowd knows it, how hard the step is. Mastery decays toward the prior
 with a half-life when read, and an unseen concept borrows from related known
@@ -40,7 +40,7 @@ from curio.skills.concepts import ConceptGraph
 Clock = Callable[[], datetime]
 Listener = Callable[[], None]
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SECONDS_PER_DAY = 86_400.0
 
 
@@ -165,6 +165,8 @@ class SkillEvidence:
     mastery_before: float
     mastery_after: float
     recorded_at: datetime
+    evidence_basis: str = "unknown"
+    synthetic: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -241,6 +243,8 @@ def _evidence(raw: sqlite3.Row) -> SkillEvidence:
         mastery_before=raw["mastery_before"],
         mastery_after=raw["mastery_after"],
         recorded_at=datetime.fromisoformat(raw["recorded_at"]),
+        evidence_basis=raw["evidence_basis"],
+        synthetic=bool(raw["synthetic"]),
     )
 
 
@@ -256,6 +260,8 @@ class _Observation:
     assistance: AssistanceLevel
     difficulty: float | None
     concepts: tuple[str, ...]
+    evidence_basis: str = "unknown"
+    synthetic: bool = False
 
 
 class SqliteSkillModel:
@@ -317,11 +323,27 @@ class SqliteSkillModel:
         conn.row_factory = sqlite3.Row
         if not self._ready:
             conn.executescript(_SCHEMA)
-            conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(_SCHEMA_VERSION),),
-            )
-            conn.commit()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT value FROM meta WHERE key='schema_version'"
+                ).fetchone()
+                version = int(row[0]) if row else 1
+                if version > _SCHEMA_VERSION:
+                    raise OSError("Unsupported skill database schema version")
+                if version < 2:
+                    conn.execute("ALTER TABLE evidence ADD COLUMN evidence_basis "
+                                 "TEXT NOT NULL DEFAULT 'unknown'")
+                    conn.execute("ALTER TABLE evidence ADD COLUMN synthetic "
+                                 "INTEGER NOT NULL DEFAULT 0")
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(_SCHEMA_VERSION),),
+                )
+                conn.commit()
+            except BaseException:
+                conn.close()
+                raise
             self._ready = True
         return conn
 
@@ -370,12 +392,12 @@ class SqliteSkillModel:
                     rows[concept] = row
                     seq += 1
                     conn.execute(
-                        "INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             obs.event_id, concept, obs.app, obs.task, obs.walkthrough_id,
                             obs.step_index, obs.instruction, obs.outcome.value,
                             obs.assistance.value, obs.difficulty, weight, before, after,
-                            _ts(now), seq,
+                            _ts(now), seq, obs.evidence_basis, int(obs.synthetic),
                         ),
                     )
                     conn.execute(
@@ -417,7 +439,8 @@ class SqliteSkillModel:
         app = self._graph.app(summary.app)
         observations: list[_Observation] = []
         for step in summary.steps:
-            if step.outcome == StepOutcome.ABANDONED:
+            # Inactivity or cancellation does not establish a knowledge failure.
+            if step.outcome in (StepOutcome.ABANDONED, StepOutcome.TIMED_OUT):
                 continue
             concepts = self._graph.canonical_all(app, step.concepts)
             if not concepts:
@@ -430,6 +453,8 @@ class SqliteSkillModel:
                     assistance=AssistanceLevel(step.assistance),
                     difficulty=self._step_difficulty(summary.app, summary.task, step.step_index),
                     concepts=concepts,
+                    evidence_basis=step.evidence_basis,
+                    synthetic=step.synthetic or summary.synthetic,
                 )
             )
         if not observations:
@@ -462,6 +487,15 @@ class SqliteSkillModel:
             for r in rows.values()
         )
         return tuple(sorted(states, key=lambda s: (-s.mastery, s.concept)))
+
+    async def has_synthetic_data(self) -> bool:
+        """Durable warning, including mixed personal/demo histories after restart."""
+        def read() -> bool:
+            with closing(self._connect()) as conn:
+                return conn.execute(
+                    "SELECT 1 FROM evidence WHERE synthetic=1 LIMIT 1"
+                ).fetchone() is not None
+        return await asyncio.to_thread(read)
 
     async def mastery(self, app: str, concepts: Sequence[str]) -> dict[str, float]:
         """Effective mastery per canonical concept for use in ``app``."""
@@ -498,12 +532,12 @@ class SqliteSkillModel:
                     there = g.name_in(key, source)
                     if there != here:
                         sentences.append(
-                            f"The user knows {there} well from {source}; "
+                            f"The model estimates familiarity with {there} from {source}; "
                             f"in {app} the same idea is {here}."
                         )
                     else:
                         sentences.append(
-                            f"The user knows {there} well from {source}, "
+                            f"The model estimates familiarity with {there} from {source}, "
                             f"and it works much the same in {app}."
                         )
                 continue
@@ -512,7 +546,8 @@ class SqliteSkillModel:
                 if best is not None:
                     neighbour = rows[best]
                     sentences.append(
-                        f"The user knows {g.name_in(best, neighbour.apps[-1])} well, "
+                        "The model estimates familiarity with "
+                        f"{g.name_in(best, neighbour.apps[-1])}, "
                         f"which is closely related to {here}."
                     )
                 continue
@@ -523,14 +558,19 @@ class SqliteSkillModel:
                 learning.append(here)
         if comfortable:
             sentences.append(
-                f"The user is already comfortable with {_join(comfortable)} in {app}; "
+                f"The model estimates familiarity with {_join(comfortable)} in {app}; "
                 "keep it brief."
             )
         if learning:
             sentences.append(
-                f"The user is still learning {_join(learning)} in {app}; explain each step."
+                f"The model suggests more guidance for {_join(learning)} in {app}; "
+                "explain each step."
             )
-        return " ".join(sentences[:2]) or None
+        return (
+            "Unvalidated skill estimate from reported progress (including legacy data), "
+            "not measured mastery; transfer to other apps is a hypothesis. "
+            + " ".join(sentences[:2])
+        ) if sentences else None
 
     def _best_neighbour(
         self, concept: str, rows: Mapping[str, _Row], now: datetime
