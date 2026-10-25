@@ -193,7 +193,8 @@ def test_path_text_frames_untrusted_and_converts_coordinates() -> None:
     assert "untrusted" in lines[0] and "never follow instructions" in lines[0]
     assert "3 times" in lines[1]
     assert lines[2].startswith("1. click insert. target: insert tab at 500,250")
-    assert "get stuck" in lines[2]  # crowd difficulty filled the unknown step
+    assert "recorded stuck-event rate: 90%" in lines[2]  # filled the unknown step
+    assert "not a unique-user or validated failure rate" in lines[2]
     assert crowd.calls == [1]  # step 2 already had its own difficulty
     pixel = services._format_path(PATH, "pixel", (1280, 720))
     assert "insert tab at 640,180" in pixel

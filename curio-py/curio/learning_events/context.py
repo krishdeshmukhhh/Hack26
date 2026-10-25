@@ -5,7 +5,8 @@ from __future__ import annotations
 from curio.learning_contract import AssistanceLevel
 
 _HINT_ONLY = (
-    "the user has done this before: give a short spoken hint for each step and use "
+    "the skill model suggests trying brief hints (an estimate, not verified knowledge): "
+    "give a short spoken hint for each step and use "
     "[POINT:none] unless they ask where something is. keep the step tags."
 )
 _ASSISTANCE_LINES = {
@@ -13,7 +14,8 @@ _ASSISTANCE_LINES = {
     AssistanceLevel.HINTED: _HINT_ONLY,
     AssistanceLevel.POINTED: None,
     AssistanceLevel.DID_IT: (
-        "the user is new to this: keep each step small, say exactly what to click, "
+        "the skill model suggests more support (an estimate): "
+        "keep each step small, say exactly what to click, "
         "and point at every step."
     ),
 }
@@ -38,5 +40,5 @@ def learning_prompt_text(
     if line:
         parts.append(line)
     if skill_context:
-        parts.append(f"what this user already knows: {skill_context.strip()}")
+        parts.append(f"estimated familiarity, not measured mastery: {skill_context.strip()}")
     return "\n\n".join(parts) if parts else None

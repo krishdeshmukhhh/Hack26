@@ -17,7 +17,7 @@ def test_demo_history_shows_transfer(tmp_path):
         assert "figma" not in {a for s in states.values() for a in s.apps}
         assert await model.recommend_assistance("figma", ["frames"]) == AssistanceLevel.HINTED
         assert await model.recommend_assistance("excel", ["pivot tables"]) == (
-            AssistanceLevel.POINTED
+            AssistanceLevel.HINTED
         )
         assert "in figma the same idea is frames" in await model.prompt_context(
             "figma", ["frames"]
@@ -35,3 +35,10 @@ def test_demo_cli(tmp_path, capsys):
     assert main(["--path", str(tmp_path / "cli.sqlite3"), "--reset"]) == 0
     out = capsys.readouterr().out
     assert "layers" in out and "figma / frames: hinted" in out
+    assert "SIMULATED" in out
+
+
+def test_demo_cli_default_uses_separate_database(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main([]) == 0
+    assert (tmp_path / "demo-skills.sqlite3").is_file()

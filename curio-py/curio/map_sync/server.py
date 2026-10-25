@@ -1,4 +1,4 @@
-"""Shared map server: stores anonymous walkthroughs, serves paths, stats and a dashboard.
+"""Shared map server: stores minimized reports, serves paths, stats and a dashboard.
 
 Standard library only. Run it on the demo network with::
 
@@ -70,7 +70,7 @@ AGE_HALF_LIFE_DAYS = 30.0
 
 STUCK_OUTCOMES = frozenset({StepOutcome.RETRIED, StepOutcome.TIMED_OUT, StepOutcome.ABANDONED})
 
-_SUMMARY_KEYS = frozenset({"v", "app", "app_version", "task", "completed", "steps"})
+_SUMMARY_KEYS = frozenset({"v", "app", "app_version", "task", "completed", "steps", "synthetic"})
 _STEP_KEYS = frozenset({"index", "instruction", "element", "concepts", "assistance", "outcome"})
 _ELEMENT_KEYS = frozenset({"label", "x", "y"})
 _ASSISTANCE_VALUES = frozenset(a.value for a in AssistanceLevel)
@@ -161,6 +161,8 @@ def validate_summary(raw: Any) -> dict[str, Any]:
         raw.get("v") == WIRE_VERSION and not isinstance(raw.get("v"), bool),
         f"unsupported wire version, expected {WIRE_VERSION}",
     )
+    synthetic = raw.get("synthetic")
+    _require(synthetic is None or isinstance(synthetic, bool), "synthetic must be boolean")
     completed = raw.get("completed")
     _require(isinstance(completed, bool), "completed must be true or false")
     steps = raw.get("steps")
@@ -173,6 +175,7 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             raw.get("app_version", ""), "app_version", max_chars=MAX_APP_CHARS, allow_empty=True
         ),
         "task": _text(raw.get("task"), "task", max_chars=MAX_TASK_CHARS),
+        **({"synthetic": synthetic} if synthetic is not None else {}),
         "completed": completed,
         "steps": [_validate_step(s, f"steps[{i}]") for i, s in enumerate(steps)],
     }
@@ -341,6 +344,13 @@ def aggregate_stats(records: Sequence[dict[str, Any]], app: str | None = None) -
         "walkthroughs": sum(t["walkthroughs"] for ts in apps.values() for t in ts),
         "apps": [{"app": name, "tasks": tasks} for name, tasks in sorted(apps.items())],
         "hardest": hardest[:10],
+        "evidence_basis": "model_reported",
+        "provenance": {
+            "synthetic": sum(r["summary"].get("synthetic") is True
+                             for r in _filter_app(records, app)),
+            "unknown": sum(r["summary"].get("synthetic") is not True
+                           for r in _filter_app(records, app)),
+        },
     }
 
 
@@ -382,6 +392,8 @@ def aggregate_paths(
         groups: dict[tuple[str, ...], dict[str, Any]] = {}
         for rank, record in enumerate(reversed(completed)):  # newest first
             steps = _canonical_steps(record["summary"])
+            if any(s["outcome"] != StepOutcome.SUCCEEDED for s in steps):
+                continue  # A completion flag cannot erase a later failed attempt.
             labels = tuple(_label(s) for s in steps)
             age_days = (now - record["received_at"]).total_seconds() / 86400
             group = groups.setdefault(
@@ -415,7 +427,8 @@ def aggregate_paths(
                 source=PathSource.SHARED,
                 app_version=group["latest"]["app_version"],
             )
-            out.append({**path_to_wire(path), "score": round(group["score"], 4)})
+            out.append({**path_to_wire(path), "score": round(group["score"], 4),
+                        "evidence_basis": "model_reported"})
     return out
 
 
@@ -522,13 +535,20 @@ class _Handler(BaseHTTPRequestHandler):
         elif url.path == "/v1/paths":
             app = self._app_param(url.query)
             paths = self.server.cached(
-                "paths", app, lambda: aggregate_paths(self.server.store.records(), app)
+                "paths", app, lambda: aggregate_paths(
+                    [r for r in self.server.store.records()
+                     if r["summary"].get("synthetic") is not True], app)
             )
             self._json(HTTPStatus.OK, {"v": WIRE_VERSION, "paths": paths})
         elif url.path == "/v1/stats":
             app = self._app_param(url.query)
+            include_synthetic = parse_qs(url.query).get("include_synthetic") == ["1"]
             stats = self.server.cached(
-                "stats", app, lambda: aggregate_stats(self.server.store.records(), app)
+                "demo-stats" if include_synthetic else "stats", app,
+                lambda: aggregate_stats(
+                    [r for r in self.server.store.records()
+                     if include_synthetic
+                     or r["summary"].get("synthetic") is not True], app)
             )
             self._json(HTTPStatus.OK, stats)
         elif url.path == "/healthz":

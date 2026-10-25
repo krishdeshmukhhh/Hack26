@@ -108,7 +108,7 @@ def test_observe_success_raises_and_failure_lowers(model):
         await model.observe(summary(step(["pivot tables"], StepOutcome.TIMED_OUT, index=3)))
         [state] = await model.snapshot()
         assert state.concept == "pivot tables"
-        assert state.attempts == 3
+        assert state.attempts == 2
         assert state.apps == ("excel",)
 
     run(scenario())
@@ -122,6 +122,18 @@ def test_abandoned_and_did_it_are_ignored(model):
             step([], index=3),
         ))
         assert await model.snapshot() == ()
+
+    run(scenario())
+
+
+def test_timeout_does_not_lower_mastery_or_create_knowledge_evidence(model):
+    async def scenario():
+        await model.observe(summary(step(["charts"])))
+        before = await model.snapshot()
+        evidence = await model.evidence("charts")
+        await model.observe(summary(step(["charts"], StepOutcome.TIMED_OUT, index=2)))
+        assert await model.snapshot() == before
+        assert await model.evidence("charts") == evidence
 
     run(scenario())
 
@@ -234,7 +246,10 @@ def test_canonical_names_and_cross_app_transfer(model):
         assert figma["layers"] == pytest.approx(P.p_init + 0.75 * (known - P.p_init))
         context = await model.prompt_context("figma", ["frames"])
         assert context == (
-            "The user knows layers well from photoshop; in figma the same idea is frames."
+            "Unvalidated skill estimate from reported progress (including legacy data), "
+            "not measured mastery; transfer to other apps is a hypothesis. "
+            "The model estimates familiarity with layers from photoshop; "
+            "in figma the same idea is frames."
         )
         [state] = await model.snapshot()
         assert state.apps == ("photoshop",)
@@ -251,7 +266,11 @@ def test_related_concepts_borrow_at_partial_strength(model):
         assert borrowed == pytest.approx(P.p_init + 0.8 * (known - P.p_init))
         assert await mastery_of(model, "keyframes") == pytest.approx(P.p_init)
         context = await model.prompt_context("excel", ["xlookup"])
-        assert context == "The user knows vlookup well, which is closely related to xlookup."
+        assert context == (
+            "Unvalidated skill estimate from reported progress (including legacy data), "
+            "not measured mastery; transfer to other apps is a hypothesis. "
+            "The model estimates familiarity with vlookup, which is closely related to xlookup."
+        )
         # first real evidence starts from the borrowed value
         await model.observe(summary(step(["xlookup"], index=9)))
         [e] = await model.evidence("xlookup")
@@ -295,8 +314,10 @@ def test_prompt_context_comfortable_and_learning(model):
         await model.observe(summary(step(["pivot tables"], StepOutcome.RETRIED, index=9)))
         text = await model.prompt_context("excel", ["charts", "pivot tables", "vlookup"])
         assert text == (
-            "The user is already comfortable with charts in excel; keep it brief. "
-            "The user is still learning pivot tables in excel; explain each step."
+            "Unvalidated skill estimate from reported progress (including legacy data), "
+            "not measured mastery; transfer to other apps is a hypothesis. "
+            "The model estimates familiarity with charts in excel; keep it brief. "
+            "The model suggests more guidance for pivot tables in excel; explain each step."
         )
 
     run(scenario())

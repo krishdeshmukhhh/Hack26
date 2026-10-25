@@ -210,7 +210,9 @@ def post_all(url: str, summaries: Sequence[WalkthroughSummary], *, delay: float 
     with httpx.Client(base_url=url.rstrip("/"), timeout=5.0) as client:
         for summary in summaries:
             while True:
-                response = client.post("/v1/walkthroughs", json=summary_to_wire(summary))
+                response = client.post(
+                    "/v1/walkthroughs", json={**summary_to_wire(summary), "synthetic": True}
+                )
                 if response.status_code != 429:
                     break
                 time.sleep(float(response.headers.get("Retry-After", "1")))

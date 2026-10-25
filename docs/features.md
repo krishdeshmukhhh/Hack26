@@ -4,11 +4,29 @@
 > Platform: Windows · Python · PySide6 · qasync  
 > Principle: **One cohesive, customizable desktop companion**, not unrelated AI utilities.
 
+Readiness evidence: [hackathon-readiness.md](hackathon-readiness.md) separates
+implemented behavior, fresh checks and open live checks. Ordinary walkthrough
+completion is model-reported; Skills shows estimated mastery, not a knowledge
+test. Timeout/cancellation is excluded from knowledge evidence. Hands-free means
+voice activation, not autonomous desktop actions. Demo skill history uses a
+separate `demo-skills.sqlite3` by default and is explicitly simulated. Human
+benefits and automatic scam detection remain unvalidated target scope.
+
+New demo skill evidence is durably marked and warns after restart; marked
+synthetic map records are excluded from normal sync. Legacy origin stays unknown.
+Shared event provenance separates model progression, user confirmation and
+checked results. Ordinary GUI progression supplies model inference only.
+See [integration review](readiness/integration-review.md) for current checks,
+including the failed native speech/provider probes.
+
 ## 1. Product goal
 
 Curio is a lightweight Windows system-tray assistant represented by an animated virtual pet near the user's cursor. The pet can listen, understand a user-authorized screenshot, explain and point to on-screen content, speak responses, react to context, and help identify potentially suspicious content. Users can select a pet and tailor its behavior.
 
-This document describes **target functionality**, not a claim that every feature already works. Confirm actual implementation status against `progress.md` and source code. `architecture.md` defines technical structure; `running.md` covers setup and execution. Avoid duplicating those files here.
+This document describes **target functionality**, not a claim that every feature
+already works. Confirm actual status against [PROGRESS.md](PROGRESS.md) and source.
+[ARCHITECTURE.md](ARCHITECTURE.md) defines structure; [RUNNING.md](RUNNING.md)
+covers setup and execution.
 
 ### Operating principles
 
