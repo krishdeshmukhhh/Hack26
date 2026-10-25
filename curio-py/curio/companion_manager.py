@@ -30,6 +30,7 @@ from curio.clients.system_tts_client import SystemTTSClient
 from curio.clients.transcription_client import TranscriptionClient
 from curio.clients.tts_client import TTSClient
 from curio.clients.whisper_transcription_client import WhisperTranscriptionClient
+from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.config import Config
 from curio.conversation_history import ConversationHistory
 from curio.hands_free import strip_finish_command
@@ -116,6 +117,7 @@ class CompanionManager(QObject):
         super().__init__(parent)
 
         self._memory = memory
+        self._coaching: CoachingRuntime | None = None
         self._config = config
         self._mic = mic
         self._hotkey = hotkey
@@ -180,6 +182,58 @@ class CompanionManager(QObject):
     def set_model(self, model_id: str) -> None:
         """Update the model used for LLM requests."""
         self._current_model = model_id
+        if self._coaching is not None:
+            self._coaching.set_model(model_id)
+
+    def attach_coaching(self, runtime: CoachingRuntime) -> None:
+        """Attach exactly one router; it is the sole coaching transcript consumer."""
+        if self._coaching is not None:
+            raise ValueError("Coaching is already attached")
+        self._coaching = runtime
+        runtime.mode_changed.connect(self._on_coaching_mode_changed)
+        runtime.interrupted.connect(self._stop_speaking)
+        runtime.response_ready.connect(self._on_coaching_reply)
+        runtime.error.connect(self.error)
+
+    def _on_coaching_mode_changed(self, _mode: str) -> None:
+        self._on_hotkey_cancelled()
+
+    def detach_coaching(self) -> None:
+        if self._coaching is None:
+            return
+        runtime = self._coaching
+        self._on_hotkey_cancelled()
+        runtime.mode_changed.disconnect(self._on_coaching_mode_changed)
+        runtime.interrupted.disconnect(self._stop_speaking)
+        runtime.response_ready.disconnect(self._on_coaching_reply)
+        runtime.error.disconnect(self.error)
+        self._coaching = None
+
+    def _on_coaching_reply(self, text: str) -> None:
+        if self._coaching is None or self._coaching.mode == CoachingMode.ASSISTANT:
+            return
+        self._stop_speaking()
+        self._cancel_flag = False
+        self._set_state(VoiceState.RESPONDING)
+        self.response_complete.emit(text)
+        # Coaching replies are display/speech only, never POINT actions, memory
+        # evidence or entries in the ordinary assistant's conversation buffer.
+        self._speak_task = asyncio.ensure_future(self._speak(text, self._generation))
+
+    async def _run_coaching_turn(self, text: str, generation: int) -> None:
+        try:
+            if generation != self._generation or self._cancel_flag:
+                return
+            self.final_transcript.emit(text)
+            await self._coaching.ask(text)
+        except asyncio.CancelledError:
+            if generation == self._generation:
+                self._set_state(VoiceState.IDLE)
+        except Exception:
+            if generation == self._generation:
+                message = "Coaching request failed. Check the session and connection, then retry."
+                self._coaching.error.emit(message)
+                self._set_state(VoiceState.IDLE)
 
     # ------------------------------------------------------------------
     # PCM deque bridge
@@ -238,6 +292,8 @@ class CompanionManager(QObject):
         self._strip_hands_free_command = False
 
         self._generation += 1
+        if self._coaching is not None:
+            self._coaching.interrupt()
         self.speaking_changed.emit(False)
 
         # A new question ends any walkthrough in progress.
@@ -275,6 +331,9 @@ class CompanionManager(QObject):
         hands_free = self._hands_free_recording
         self._hands_free_recording = False
         self._generation += 1
+        if self._coaching is not None:
+            self._coaching.interrupt()
+        self._end_walkthrough()
         self._cancel_flag = True
         self._tts.stop()
         self.speaking_changed.emit(False)
@@ -331,7 +390,12 @@ class CompanionManager(QObject):
         # press between task assignment and coroutine start cannot
         # have its cancellation silently undone.
         self._cancel_flag = False
-        self._current_task = asyncio.ensure_future(self._run_turn(text, self._generation))
+        if self._coaching is not None and self._coaching.mode != CoachingMode.ASSISTANT:
+            self._current_task = asyncio.ensure_future(
+                self._run_coaching_turn(text, self._generation)
+            )
+        else:
+            self._current_task = asyncio.ensure_future(self._run_turn(text, self._generation))
 
     # ------------------------------------------------------------------
     # LLM delta relay (only when not cancelled)
@@ -430,6 +494,9 @@ class CompanionManager(QObject):
         await self._run_turn(f"i did step {step.index}. what's next?", continuing_step=step.index)
 
     def _on_escape(self) -> None:
+        if self._coaching is not None and self._coaching.mode != CoachingMode.ASSISTANT:
+            self._coaching.stop_session()
+            return
         if self._walkthrough is None and self._state != VoiceState.GUIDING:
             return
         self._stop_speaking()

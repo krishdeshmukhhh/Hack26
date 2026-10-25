@@ -35,7 +35,9 @@ def test_native_sapi_grammar_events():
     from comtypes.gen import SpeechLib
 
     recognizer.State = 0
-    configure_wake_microphone(recognizer)
+    # Emulation must not wait on a real TV/conversation to finish its utterance.
+    # Live microphone initialization/progress is verified in a separate test.
+    recognizer.AudioInput = None
     context, grammar = create_wake_grammar(recognizer)
     events = []
 
@@ -123,7 +125,15 @@ def test_native_sapi_live_microphone_stream_advances():
         recognizer.State = 0
 
 
-def test_native_sapi_recognizes_synthesized_wake_audio(tmp_path):
+@pytest.mark.parametrize(
+    ("text", "recording", "expected_rule"),
+    [("Hey Curio", False, "CurioWake"),
+     ("How do I change my wallpaper? Curio send.", True, "CurioSend"),
+     ("Curio cancel", True, "CurioCancel")],
+)
+def test_native_sapi_recognizes_synthesized_wake_audio(
+    tmp_path, text, recording, expected_rule,
+):
     """Exercise acoustic recognition using a local TTS WAV, not emulated text."""
     from comtypes.client import CreateObject, GetEvents
 
@@ -132,7 +142,7 @@ def test_native_sapi_recognizes_synthesized_wake_audio(tmp_path):
     wave_path = str(tmp_path / "wake.wav")
     output.Open(wave_path, 3)  # SSFMCreateForWrite
     voice.AudioOutputStream = output
-    voice.Speak("Hey Curio", 0)
+    voice.Speak(text, 0)
     output.Close()
 
     recognizer = CreateObject("SAPI.SpInprocRecognizer")
@@ -143,11 +153,12 @@ def test_native_sapi_recognizes_synthesized_wake_audio(tmp_path):
     source.Open(wave_path, 0)  # SSFMOpenForRead
     recognizer.AudioInputStream = source
     context, grammar = create_wake_grammar(recognizer)
+    set_command_mode(grammar, recording)
     events = []
 
     class Events:
         def Recognition(self, *args):
-            events.append(args[-1].PhraseInfo.GetText().lower())
+            events.append(args[-1].PhraseInfo.Rule.Name)
 
     connection = GetEvents(context, Events(), interface=SpeechLib._ISpeechRecoContextEvents)
     messages = WindowsMessagePump()
@@ -157,7 +168,7 @@ def test_native_sapi_recognizes_synthesized_wake_audio(tmp_path):
         while not events and time.monotonic() < deadline:
             messages.pump()
             time.sleep(0.01)
-        assert events and events[0] in ("hey curio", "hey clickie")
+        assert events and events[0] == expected_rule
     finally:
         recognizer.State = 0
         connection.disconnect()
@@ -171,7 +182,7 @@ def test_native_sapi_send_cancel_commands_and_mode_gating():
     from comtypes.gen import SpeechLib
 
     recognizer.State = 0
-    configure_wake_microphone(recognizer)
+    recognizer.AudioInput = None  # Deterministic emulation, no live utterance contention.
     context, grammar = create_wake_grammar(recognizer)
     events = []
 
