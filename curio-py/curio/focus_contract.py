@@ -257,6 +257,7 @@ class SessionSummary:
     false_alarms: int
     concepts_practised: tuple[str, ...] = ()
     reflection: str = ""  # learner's own words, optional
+    distractions: tuple[str, ...] = ()  # app_key()s of drift episodes; seeds if-then suggestions
 
 
 # --- Protocols -----------------------------------------------------------------
@@ -299,7 +300,9 @@ class DriftTracker(Protocol):
 class FocusPolicy(Protocol):
     def decide(self, signal: FocusSignal, plan: FocusPlan) -> Intervention | None: ...
 
-    def record_response(self, intervention: Intervention, response: InterventionResponse) -> None: ...
+    def record_response(
+        self, intervention: Intervention, response: InterventionResponse
+    ) -> None: ...
 
     def resume_note(self) -> ResumeNote | None: ...
 
