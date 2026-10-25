@@ -1,10 +1,10 @@
-"""Render a verified path as plain lowercase text for the system prompt."""
+"""Render a recorded path as plain lowercase reference text for the prompt."""
 
 from __future__ import annotations
 
 from curio.learning_contract import PathSource, TaskPath
 
-HARD_STEP_DIFFICULTY = 0.4  # share of users stuck at which a step is called out
+HARD_STEP_DIFFICULTY = 0.4  # recorded stuck-event rate at which a step is called out
 
 
 def _position(x: float, y: float, point_coords: str, image_size: tuple[int, int] | None) -> str:
@@ -26,10 +26,11 @@ def format_for_prompt(
     ``point_coords`` is "norm1000" (0-1000 grid) or "pixel" (``image_size``
     pixels of the screenshot; positions are left out when it's None).
     """
-    who = "on this computer" if path.source == PathSource.LOCAL else "by other curio users"
+    who = "on this computer" if path.source == PathSource.LOCAL else "from shared records"
     times = "once" if path.verified_count == 1 else f"{path.verified_count} times"
     lines = [
-        f"a verified path for this task, followed to the end {times} {who}. "
+        f"a recorded path for this task, with model-reported completion {times} {who}. "
+        "completion is not independently verified. "
         "guide the user along it one step at a time, but trust the current screenshot "
         "if it looks different:"
     ]
@@ -41,6 +42,9 @@ def format_for_prompt(
             if position:
                 line += f" at {position}"
         if step.difficulty is not None and step.difficulty >= HARD_STEP_DIFFICULTY:
-            line += ". most people get stuck here, so be extra clear"
+            line += (
+                f". recorded stuck-event rate: {step.difficulty:.0%}; be extra clear. "
+                "this is not a unique-user or validated failure rate"
+            )
         lines.append(line.lower())
     return "\n".join(lines)

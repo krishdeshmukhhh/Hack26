@@ -64,10 +64,10 @@ _BAND_COLORS = {
     AssistanceLevel.DID_IT: DS.Colors.error_red,
 }
 _BAND_TEXT = {
-    AssistanceLevel.NONE: "Knows it — Curio stays out of the way",
+    AssistanceLevel.NONE: "Estimated familiar — less guidance suggested",
     AssistanceLevel.HINTED: "Getting there — Curio gives a hint",
     AssistanceLevel.POINTED: "Learning — Curio points at each step",
-    AssistanceLevel.DID_IT: "New — Curio can do it for you",
+    AssistanceLevel.DID_IT: "More support suggested — ask for step-by-step guidance",
 }
 _ASSISTANCE_TEXT = {
     AssistanceLevel.NONE: "on your own",
@@ -76,7 +76,7 @@ _ASSISTANCE_TEXT = {
     AssistanceLevel.DID_IT: "done by Curio",
 }
 _OUTCOME_TEXT = {
-    StepOutcome.SUCCEEDED: "Got it",
+    StepOutcome.SUCCEEDED: "Model reported progress",
     StepOutcome.RETRIED: "Had to retry",
     StepOutcome.TIMED_OUT: "Timed out",
     StepOutcome.ABANDONED: "Stopped",
@@ -212,12 +212,16 @@ class SkillsWidget(QWidget):
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
         titles.addWidget(title)
         subtitle = QLabel(
-            "What Curio has learned about what you know, from your walkthroughs. "
-            "It stays on this device, and you can reset any of it."
+            "Estimates from model-reported walkthrough progress, not a knowledge test. "
+            "Unmarked history has unknown origin. You can reset any estimate."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f"color: {c.text_secondary};")
         titles.addWidget(subtitle)
+        self.synthetic_banner = QLabel("SIMULATED data present — estimates include demo history.")
+        self.synthetic_banner.setWordWrap(True)
+        self.synthetic_banner.hide()
+        titles.addWidget(self.synthetic_banner)
         header.addLayout(titles, 1)
         self.summary = QLabel()
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
@@ -229,7 +233,7 @@ class SkillsWidget(QWidget):
         self.tree = QTreeWidget()
         self.tree.setAccessibleName("Skills by app")
         self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(["Concept", "Mastery", "Attempts", "Last practiced"])
+        self.tree.setHeaderLabels(["Concept", "Estimated mastery", "Attempts", "Last practiced"])
         self.tree.setItemDelegateForColumn(1, MasteryBarDelegate(self.tree))
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -370,6 +374,8 @@ class SkillsWidget(QWidget):
 
     async def _fetch(self) -> None:
         states = await self._model.snapshot()
+        provenance = getattr(self._model, "has_synthetic_data", None)
+        self.synthetic_banner.setVisible(bool(await provenance()) if provenance else False)
         self._states = {s.concept: s for s in states}
         now = self._clock()
         selected = self._selected
@@ -499,7 +505,10 @@ class SkillsWidget(QWidget):
             for e in rows:
                 delta = e.mastery_after - e.mastery_before
                 when = e.recorded_at.astimezone().strftime("%b %d")
-                hard = "" if e.difficulty is None else f" · {e.difficulty:.0%} of users got stuck"
+                hard = (
+                    "" if e.difficulty is None
+                    else f" · {e.difficulty:.0%} recorded stuck-event rate"
+                )
                 item = QListWidgetItem(
                     f"{delta:+.0%}  {_OUTCOME_TEXT[e.outcome]} {_ASSISTANCE_TEXT[e.assistance]}"
                     f" · {when}\n“{e.instruction}” — {e.task} ({e.app}, step {e.step_index})"

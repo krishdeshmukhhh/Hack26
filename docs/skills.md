@@ -1,6 +1,11 @@
 # Skill model
 
-What this user knows, per concept, so Curio can decide how much help to give.
+Unvalidated per-concept familiarity estimates suggest how much help to give.
+They are not calibrated knowledge tests. Timeout/abandonment is not knowledge
+failure; prompt context and proposed cross-app transfer are explicitly estimates.
+Skill schema 2 retains evidence basis/synthetic marking; historical values and
+unmarked origin remain unknown. The Skills window warns when marked synthetic
+data is present, including after restart or mixed with other histories.
 Code: `curio-py/curio/skills/`. Contract: `SkillModel` in
 `curio/learning_contract.py`.
 
@@ -119,5 +124,6 @@ uv run python -m curio.skills.demo --path demo-skills.sqlite3 --reset --show
 
 This fills about six weeks of history: strong photoshop layers, middling masks,
 learning excel pivot tables, figma never opened. Asking about figma frames
-gives `HINTED` plus the transfer sentence. Leave out `--path` to fill the real
-skills file.
+gives `HINTED` plus a hypothetical transfer sentence. Leaving out `--path` now
+uses a separate `demo-skills.sqlite3` in the current directory, not personal data.
+All new demo evidence is marked synthetic and console/UI labels disclose it.

@@ -1,19 +1,22 @@
 # Task map
 
-`curio/task_map/` remembers the click paths that finished a task on this
-machine, plus the paths pulled from the shared map, so the next walkthrough
-for the same task can follow a known-good path.
+`curio/task_map/` remembers model-reported completed paths and shared references.
+These are not independently verified or known-good results. `report_count`
+aliases legacy `verified_count`; SQL verification names also mean report counters.
+Schema 2 preserves old records/counts with unknown evidence origin.
 
 ## Recording
 
 `SqliteTaskMap.record(summary)` runs after every walkthrough.
 
-- Every step event updates per-step attempt counts, including events from
+- Marked synthetic summaries are ignored by the ordinary local task map.
+- Other step events update per-step attempt counts, including events from
   walkthroughs that never finished, because those are where people get stuck.
   `LocalDifficulty` reads these counts.
-- Only `completed` summaries become paths. For each step index the last
-  `SUCCEEDED` attempt is kept, retries and abandoned attempts are dropped, and
-  the steps are renumbered from 1.
+- Only completed summaries with no contradictory final attempt become paths.
+  The final attempt at every index must report success; a later failure cannot
+  resurrect an earlier success. Steps are renumbered from 1. Completion remains
+  a report, not independent checking.
 - A path is identified by its sequence of element labels (case and spacing
   ignored). If a local path for the same app and a matching task has the same
   sequence, it gets another verification and its steps are replaced with the

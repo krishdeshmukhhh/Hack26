@@ -1,5 +1,26 @@
 # Architecture
 
+## Readiness provenance integration
+
+Shared StepEvent carries evidence_basis, a local-only opaque evidence_ref and
+synthetic marking. Unknown, model-inferred, user-confirmed and checked results
+are distinct. Checked results require a matching outcome/reference; the trusted
+adapter remains responsible for actually checking work. Ordinary STEP/DONE
+remains model-inferred; clicks never grant confirmation. WalkthroughSummary
+records completed_basis. Exact math remains separate from ordinary GUI learning.
+
+Event schema 3, task-path schema 2 and skill schema 2 preserve old records and
+estimates with unknown/unmarked origin. TaskPath.report_count aliases legacy
+verified_count, not a correctness metric. Contradictory final attempts cannot
+reinforce paths. Synthetic summaries are excluded from ordinary local task maps;
+Skills retains marked demo evidence with a persistent visible warning.
+
+The v1 sync payload omits local result references and checked bases. Its optional
+synthetic extension requires the updated server. Default sync excludes marked
+synthetic records; dashboard explicitly requests and labels them. Remote evidence
+is model-reported/unknown, never independently checked. Historical unmarked seeds
+cannot be retrospectively identified. No server deployment occurred.
+
 ## Coaching and tutoring application integration
 
 `coaching_runtime.py` and `ui/coaching_window.py` connect the shared contract,
@@ -165,7 +186,10 @@ answer with [STEP] ──► WalkthroughRecorder ──► StepEvent ──► S
   - two minutes without a click: `TIMED_OUT`
 
   `CompanionManager._end_walkthrough(outcome)` is the single exit, and
-  `_step_assistance` is the hook for hands-free mode's `DID_IT`.
+  `_step_assistance` records pointing or hints. Hands-free is voice input;
+  `DID_IT` is reserved and does not mean the app executes desktop actions.
+  Progress/completion is inferred from model STEP output, not independently
+  checked application state. Timeout/abandonment does not update skill knowledge.
 - **Fan-out.** `LearningServices` runs all writes as background tasks that
   log failures. Event appends, `task_map.record` and `skill_model.observe`
   run for every summary. `map_sync.push` runs only when the sharing toggle
@@ -174,6 +198,8 @@ answer with [STEP] ──► WalkthroughRecorder ──► StepEvent ──► S
   but the task map prefers the highest `verified_count`. `rank_by_pull_order`
   therefore clamps every later path for a task below the first one before
   merging, so an outdated path with many old verifications can't win.
+  The legacy `verified_count` field counts model-reported completions; it is
+  neither independently verified success nor a unique-user count.
 - **Per request.** This covers how-to questions and walkthrough continuations
   only. `task_map.find` supplies the path, which WS2's `format_for_prompt`
   renders in the active POINT coordinates. Steps with unknown difficulty get

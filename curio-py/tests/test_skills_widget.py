@@ -68,6 +68,7 @@ def test_groups_bars_evidence_and_live_refresh(app, tmp_path):
             await model.observe(summary("photoshop", "layers", i + 1))
         await model.observe(summary("figma", "frames", 10, assistance=AssistanceLevel.POINTED))
         widget = SkillsWidget(model, clock=lambda: NOW)
+        assert widget.tree.headerItem().text(1) == "Estimated mastery"
         refreshed = []
         widget.refreshed.connect(lambda: refreshed.append(True))
         widget.show()
@@ -88,6 +89,7 @@ def test_groups_bars_evidence_and_live_refresh(app, tmp_path):
         assert widget.mastery_label.text().endswith("%")
         assert widget.evidence_list.count() == 4
         assert "with pointing" in widget.evidence_list.item(0).text()
+        assert "Model reported progress" in widget.evidence_list.item(0).text()
         assert "Helps with:" in widget.related_label.text()
 
         # observing a walkthrough refreshes the open window

@@ -1,0 +1,8 @@
+study_id,task_id,period,condition,status,elapsed_seconds,wrong_actions,resource_switches,interventions,effort_1_7,frustration_1_7,notes
+SYNTHETIC_01,A,1,usual,completed,120,1,4,0,3,2,synthetic only
+SYNTHETIC_01,B,2,curio,timeout,600,3,6,1,7,7,synthetic only
+SYNTHETIC_01,C,3,unassisted,failed,45,,0,0,,,synthetic only
+SYNTHETIC_02,B,1,curio,error,25,0,2,1,,,synthetic only
+SYNTHETIC_02,A,2,usual,withdrawn,,0,,0,,,synthetic only
+SYNTHETIC_03,A,1,curio,completed,100,0,2,0,2,2,synthetic only
+SYNTHETIC_03,B,2,usual,completed,140,1,4,0,3,4,synthetic only
