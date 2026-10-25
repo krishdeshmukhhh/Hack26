@@ -11,6 +11,7 @@ from PySide6.QtGui import QGuiApplication
 from curio.config import Config, ConfigError, UiSettings
 from curio.state import VoiceState
 from curio.ui.spotlight import (
+    ARRIVAL_FALLBACK_MS,
     AUTO_HIDE_MS,
     HOLE_RADIUS,
     SpotlightController,
@@ -197,6 +198,47 @@ def test_raise_hook_runs_after_show(qt_app) -> None:  # noqa: F811
     controller.point_started(1, 2)
     controller.arrived()
     assert raised == [[("show", 1, 2, 0.35)]]
+
+
+def test_fallback_shows_when_arrival_never_reported(qt_app) -> None:  # noqa: F811
+    controller, overlay = _controller()
+    controller.point_started(710, 1176)
+    assert controller._fallback_timer.isActive()
+    assert controller._fallback_timer.interval() == ARRIVAL_FALLBACK_MS
+    controller._on_fallback()
+    assert controller.state == "dim"
+    assert overlay.events == [("show", 710, 1176, 0.35)]
+    assert not controller._fallback_timer.isActive()
+
+
+def test_fallback_is_cancelled_by_arrival_and_hide(qt_app) -> None:  # noqa: F811
+    controller, overlay = _controller()
+    controller.point_started(1, 2)
+    controller.arrived()
+    assert not controller._fallback_timer.isActive()
+    controller.hide()
+    controller.point_started(3, 4)
+    controller.hide()
+    assert not controller._fallback_timer.isActive()
+    controller._on_fallback()  # a stale timeout must not resurrect it
+    assert controller.state == "hidden"
+    assert [e[0] for e in overlay.events] == ["show", "fade_out"]
+
+
+def test_show_and_hide_are_logged(qt_app, caplog) -> None:  # noqa: F811
+    import logging
+
+    geo = QGuiApplication.primaryScreen().geometry()
+    overlay = SpotlightOverlay()
+    controller = SpotlightController(UiSettings(), lambda dim: overlay)
+    with caplog.at_level(logging.INFO, logger="curio.ui.spotlight"):
+        controller.point_started(geo.x() + 5, geo.y() + 6)
+        controller.arrived()
+        controller.hide()
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("spotlight: show at (") for m in messages)
+    assert any(m.startswith("spotlight: hide (") for m in messages)
+    overlay.hide_now()
 
 
 # ---- manager hooks ----

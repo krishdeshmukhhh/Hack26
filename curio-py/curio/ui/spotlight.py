@@ -15,6 +15,7 @@ machine that CompanionManager and the companion widget drive.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable
 from enum import Enum, auto
@@ -37,7 +38,10 @@ from curio.ui.pointer_bubble import CURSOR_BLUE
 from curio.ui.window_effects import (
     make_non_activating,
     make_overlay_window,
+    raise_without_activating,
 )
+
+logger = logging.getLogger(__name__)
 
 HOLE_RADIUS = 70        # logical px: fully clear inside this (minus half the feather)
 FEATHER = 30            # width of the soft edge, centred on HOLE_RADIUS
@@ -46,6 +50,9 @@ RING_ONLY_FADE_MS = 400
 PULSE_MS = 1200
 FRAME_MS = 33           # ~30 fps; enough for a gentle pulse and cheap on 4K
 AUTO_HIDE_MS = 8000
+# Show anyway if the companion never reports landing (e.g. the sprite is clamped to the
+# work area and can't reach a target on the taskbar).
+ARRIVAL_FALLBACK_MS = 3000
 
 
 class SpotlightOverlay(QWidget):
@@ -105,8 +112,14 @@ class SpotlightOverlay(QWidget):
         self._clock.start()
         self._set_opacity(0.0)
         self.show()
+        # Targets on the taskbar (Start button) need us above it in the topmost band.
+        raise_without_activating(self)
         self._frame_timer.start()
         self._animate_opacity(1.0, FADE_MS)
+        logger.info(
+            "spotlight: show at (%d,%d) screen=%s geometry=%dx%d",
+            x, y, screen.name(), geo.width(), geo.height(),
+        )
 
     def set_dim(self, enabled: bool) -> None:
         """Animate to the ring-only look (False) or back to the full dim (True)."""
@@ -154,6 +167,7 @@ class SpotlightOverlay(QWidget):
             return
         self._set_dim_level(self._dim_level)
         self.show()
+        raise_without_activating(self)
         self._frame_timer.start()
 
     # ------------------------------------------------------------------
@@ -266,6 +280,11 @@ class SpotlightController(QObject):
         self._auto_timer.setInterval(AUTO_HIDE_MS)
         self._auto_timer.timeout.connect(self._on_auto_timeout)
 
+        self._fallback_timer = QTimer(self)
+        self._fallback_timer.setSingleShot(True)
+        self._fallback_timer.setInterval(ARRIVAL_FALLBACK_MS)
+        self._fallback_timer.timeout.connect(self._on_fallback)
+
     @property
     def state(self) -> str:
         return self._state.name.lower()
@@ -282,11 +301,15 @@ class SpotlightController(QObject):
         self._target = (x, y)
         self._hold = hold
         self._state = _State.PENDING
+        self._fallback_timer.start()
+        logger.debug("spotlight: pending at (%d,%d) hold=%s", x, y, hold)
 
     def arrived(self) -> None:
         """The companion landed on the target."""
         if self._state is not _State.PENDING or self._target is None:
             return
+        self._fallback_timer.stop()
+        logger.debug("spotlight: arrival reported")
         if self._overlay is None:
             self._overlay = self._overlay_factory(self._settings.spotlight_dim)
         self._overlay.show_at(*self._target, self._settings.spotlight_dim)
@@ -295,16 +318,18 @@ class SpotlightController(QObject):
         if self.raise_above is not None:
             self.raise_above()
 
-    def hide(self) -> None:
+    def hide(self, reason: str = "requested") -> None:
         """Fade out (step finished, cancelled, new target, no target)."""
         self._auto_timer.stop()
+        self._fallback_timer.stop()
         if self._state in (_State.DIM, _State.RING) and self._overlay is not None:
+            logger.info("spotlight: hide (%s)", reason)
             self._overlay.fade_out()
         self._state = _State.HIDDEN
         self._target = None
 
     def hide_now(self) -> None:
-        self.hide()
+        self.hide("hide_now")
         if self._overlay is not None:
             self._overlay.hide_now()
 
@@ -317,10 +342,15 @@ class SpotlightController(QObject):
         if self._overlay is not None and self._state in (_State.DIM, _State.RING):
             self._overlay.resume()
 
+    def _on_fallback(self) -> None:
+        if self._state is _State.PENDING:
+            logger.debug("spotlight: no arrival within %d ms; showing anyway", ARRIVAL_FALLBACK_MS)
+            self.arrived()
+
     def _on_auto_timeout(self) -> None:
         if self._state is _State.DIM and self._hold and self._overlay is not None:
             # A walkthrough step waits for the user; keep the cue but stop dimming.
             self._overlay.set_dim(False)
             self._state = _State.RING
         elif self._state is _State.DIM:
-            self.hide()
+            self.hide("timeout")
