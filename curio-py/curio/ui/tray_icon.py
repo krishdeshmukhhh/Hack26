@@ -29,6 +29,7 @@ class TrayIcon(QSystemTrayIcon):
     # like the macOS menu bar toggle. Persisted across launches.
     show_cursor_toggled = Signal(bool)
     pet_selected = Signal(str)
+    hands_free_toggled = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -44,6 +45,12 @@ class TrayIcon(QSystemTrayIcon):
         self._show_cursor_action.setChecked(self.show_cursor)
         self._show_cursor_action.toggled.connect(self._on_show_cursor_toggled)
         menu.addAction(self._show_cursor_action)
+
+        self._hands_free_action = QAction('Hands-free: "Hey Curio"', menu)
+        self._hands_free_action.setCheckable(True)
+        self._hands_free_action.setChecked(self.hands_free_enabled)
+        self._hands_free_action.toggled.connect(self._on_hands_free_toggled)
+        menu.addAction(self._hands_free_action)
 
         settings_action = QAction("Settings", menu)
         settings_action.triggered.connect(lambda: self.show_settings_requested.emit())
@@ -88,6 +95,27 @@ class TrayIcon(QSystemTrayIcon):
     def _on_show_cursor_toggled(self, checked: bool) -> None:
         self._settings.setValue("show_cursor", checked)
         self.show_cursor_toggled.emit(checked)
+
+    @property
+    def hands_free_enabled(self) -> bool:
+        return self._settings.value("hands_free", False, type=bool)
+
+    def _on_hands_free_toggled(self, checked: bool) -> None:
+        self._settings.setValue("hands_free", checked)
+        self.hands_free_toggled.emit(checked)
+
+    def set_hands_free_enabled(self, enabled: bool) -> None:
+        self._hands_free_action.setChecked(enabled)
+
+    def set_hands_free_available(self, available: bool) -> None:
+        previous = self._hands_free_action.blockSignals(True)
+        self._hands_free_action.setChecked(self.hands_free_enabled if available else False)
+        self._hands_free_action.blockSignals(previous)
+        self._hands_free_action.setEnabled(available)
+        self._hands_free_action.setToolTip(
+            'Say "Hey Curio", wait, then ask. Say "Curio, send" to finish in background speech.'
+            if available else 'Hands-free requires backend = "local" and local Whisper.'
+        )
 
     def set_selected_pet(self, species: str) -> None:
         """Synchronize the menu after loading or persisting a selection."""

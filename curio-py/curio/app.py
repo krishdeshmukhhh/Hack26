@@ -28,6 +28,7 @@ from curio.clients.tts_client import TTSClient
 from curio.clients.whisper_transcription_client import WhisperTranscriptionClient
 from curio.companion_manager import CompanionManager
 from curio.config import Config, ConfigError
+from curio.hands_free import HandsFreeController
 from curio.hotkey import HotkeyMonitor
 from curio.logging_config import configure_logging
 from curio.memory_runtime import MemoryRuntime
@@ -120,6 +121,7 @@ def run() -> int:
         logger.warning("config error: %s", result.config_error)
 
     tray_icon = TrayIcon()
+    tray_icon.set_hands_free_available(False)
     companion = PetCompanionWidget(settings=result.config.pet if result.config else PetSettings())
     tray_icon.set_selected_pet(companion.settings.species)
 
@@ -161,6 +163,7 @@ def run() -> int:
     tts: TTSClient | SystemTTSClient | KokoroTTSClient | None = None
     memory_runtime = None
     memory_window = None
+    hands_free = None
     if result.config is not None:
         memory_runtime = MemoryRuntime(result.config.memory, config_path=result.config_path)
         memory_window = MemoryWindow(
@@ -199,6 +202,13 @@ def run() -> int:
             panel_visibility_controller=companion,
             memory=memory_runtime.conversation,
         )
+        if local is not None:
+            hands_free = HandsFreeController(manager, mic, hotkey_monitor)
+            tray_icon.set_hands_free_available(True)
+            tray_icon.hands_free_toggled.connect(hands_free.set_enabled)
+            hands_free.enabled_changed.connect(tray_icon.set_hands_free_enabled)
+            hands_free.error.connect(companion.show_error)
+            hands_free.error.connect(lambda msg: logger.warning("hands-free: %s", msg))
 
         # State → companion
         manager.state_changed.connect(companion.set_state)
@@ -264,12 +274,17 @@ def run() -> int:
     signal.signal(signal.SIGINT, lambda *_: result.app.quit())
 
     with loop:
+        if hands_free is not None:
+            hands_free.set_enabled(tray_icon.hands_free_enabled)
         # Load local models up front so the first question isn't slow.
         if isinstance(transcription, WhisperTranscriptionClient):
             loop.create_task(transcription.preload())
         if isinstance(tts, KokoroTTSClient):
             loop.create_task(tts.preload())
         loop.run_forever()
+        if hands_free is not None:
+            hands_free.close()
+        mic.stop()
         if memory_window is not None:
             memory_window.close()
         if memory_runtime is not None:
