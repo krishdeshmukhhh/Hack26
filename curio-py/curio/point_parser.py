@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from curio.learning_contract import concept_key
+
 
 @dataclass(frozen=True, slots=True)
 class PointTag:
@@ -52,8 +54,10 @@ class StepTag:
 _STEP_RE = re.compile(r"\s*\[STEP:\s*(\d+)\s*/\s*(\d+)\s*\]")
 # Any complete control tag, or an unfinished one at the very end of a
 # still-streaming response (e.g. "... [POI").
-_ANY_TAG_RE = re.compile(r"\s*\[(?:POINT|STEP):[^\]]*\]")
-_PARTIAL_TAG_RE = re.compile(r"\s*\[(?:[A-Z]{0,5}|(?:POINT|STEP):[^\]]*)$")
+_ANY_TAG_RE = re.compile(r"\s*\[(?:POINT|STEP|CONCEPTS):[^\]]*\]")
+_PARTIAL_TAG_RE = re.compile(r"\s*\[(?:[A-Z]{0,8}|(?:POINT|STEP|CONCEPTS):[^\]]*)$")
+_CONCEPTS_RE = re.compile(r"\s*\[CONCEPTS:([^\]]*)\]")
+MAX_CONCEPTS = 3
 
 
 def parse_step_tag(response: str) -> tuple[str, StepTag | None]:
@@ -70,6 +74,25 @@ def parse_step_tag(response: str) -> tuple[str, StepTag | None]:
     if index < 1:
         return (rest, None)
     return (rest, StepTag(index=index, total=max(total, index)))
+
+
+def parse_concepts_tag(response: str) -> tuple[str, tuple[str, ...]]:
+    """Remove a [CONCEPTS:a, b] tag from anywhere in the response.
+
+    Returns (response_without_tag, concept_keys): at most three, normalised
+    with ``concept_key``, duplicates and blanks dropped. Run this before
+    ``parse_point_tag``, which expects the POINT tag at the very end.
+    """
+    m = _CONCEPTS_RE.search(response)
+    if not m:
+        return (response, ())
+    rest = (response[: m.start()] + response[m.end():]).rstrip()
+    concepts: list[str] = []
+    for raw in m.group(1).split(","):
+        key = concept_key(raw)
+        if key and key not in concepts:
+            concepts.append(key)
+    return (rest, tuple(concepts[:MAX_CONCEPTS]))
 
 
 def strip_tags_for_display(text: str) -> str:

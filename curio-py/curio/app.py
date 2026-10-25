@@ -29,8 +29,17 @@ from curio.clients.tts_client import TTSClient
 from curio.clients.whisper_transcription_client import WhisperTranscriptionClient
 from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.companion_manager import CompanionManager
-from curio.config import Config, ConfigError
+from curio.config import Config, ConfigError, save_share_walkthroughs
 from curio.hotkey import HotkeyMonitor
+from curio.learning_events import (
+    LearningServices,
+    NullMapSync,
+    NullSkillModel,
+    NullTaskMap,
+    SqliteEventLog,
+    default_event_log_path,
+)
+from curio.learning_events.skills_window import SkillsWindow
 from curio.logging_config import configure_logging
 from curio.memory_runtime import MemoryRuntime
 from curio.mic_capture import MicCapture
@@ -55,6 +64,23 @@ def _configured_llm(config: Config):
             base_url=config.local.llm_base_url, api_key=config.local.llm_api_key
         )
     return LLMClient(worker_url=config.worker_url)
+
+
+def _build_learning(config: Config) -> LearningServices | None:
+    """Walkthrough learning, or None when ``[learning] enabled = false``.
+
+    The task map, skill model and map sync are null stand-ins until their
+    branches are merged and constructed here.
+    """
+    if not config.learning.enabled:
+        return None
+    return LearningServices(
+        event_log=SqliteEventLog(default_event_log_path()),
+        task_map=NullTaskMap(),
+        skill_model=NullSkillModel(),
+        map_sync=NullMapSync(),
+        share_walkthroughs=config.learning.share_walkthroughs,
+    )
 
 
 @dataclass
@@ -134,6 +160,7 @@ def run() -> int:
     tray_icon = TrayIcon()
     companion = PetCompanionWidget(settings=result.config.pet if result.config else PetSettings())
     tray_icon.set_selected_pet(companion.settings.species)
+    tray_icon.set_learning_available(False)  # enabled once learning is built
 
     def select_pet(species: str) -> None:
         try:
@@ -173,6 +200,7 @@ def run() -> int:
     tts: TTSClient | SystemTTSClient | KokoroTTSClient | None = None
     memory_runtime = None
     memory_window = None
+    learning = None
     coaching_runtime = None
     coaching_window = None
     if result.config is not None:
@@ -199,6 +227,27 @@ def run() -> int:
         else:
             transcription = TranscriptionClient(worker_url=result.config.worker_url)
             tts = TTSClient(worker_url=result.config.worker_url)
+        learning = _build_learning(result.config)
+        if learning is not None:
+            skills_window = SkillsWindow(learning.skill_model)
+            tray_icon.show_skills_requested.connect(skills_window.show)
+            tray_icon.show_skills_requested.connect(skills_window.raise_)
+            tray_icon.show_skills_requested.connect(skills_window.activateWindow)
+            tray_icon.set_share_walkthroughs(learning.share_walkthroughs)
+
+            def toggle_sharing(enabled: bool) -> None:
+                try:
+                    save_share_walkthroughs(result.config_path, enabled)
+                except (OSError, ConfigError) as exc:
+                    logger.error("cannot save sharing setting: %s", exc)
+                    tray_icon.set_share_walkthroughs(learning.share_walkthroughs)
+                    companion.flash_error(str(exc))
+                    return
+                learning.share_walkthroughs = enabled
+                logger.info("learning: sharing %s", "on" if enabled else "off")
+
+            tray_icon.share_walkthroughs_toggled.connect(toggle_sharing)
+            tray_icon.set_learning_available(True)
         manager = CompanionManager(
             config=result.config,
             mic=mic,
@@ -209,6 +258,7 @@ def run() -> int:
             screen_capture_fn=capture_all,
             panel_visibility_controller=companion,
             memory=memory_runtime.conversation,
+            learning=learning,
         )
 
         capture_lock = asyncio.Lock()
@@ -315,7 +365,11 @@ def run() -> int:
             loop.create_task(transcription.preload())
         if isinstance(tts, KokoroTTSClient):
             loop.create_task(tts.preload())
+        if learning is not None:
+            learning.refresh_shared()  # pull the shared map once at startup
         loop.run_forever()
+        if learning is not None:
+            loop.run_until_complete(learning.drain())
         if coaching_window is not None:
             loop.run_until_complete(coaching_window.aclose())
         if coaching_runtime is not None:

@@ -41,10 +41,11 @@ if the user asks how to do something on screen that takes more than one action (
 after the user does it, you'll get a fresh screenshot and the message "i did step k. what's next?". look at the new screen, then give step k+1 the same way, ending with [STEP:k+1/N]. you can change N if it turns out to be more or fewer steps. if the new screen shows the step didn't work, say so and give that step again with the same number.
 on the final step use [STEP:N/N]. if the user tells you they're done, or the screen shows the task is finished, say so briefly and leave out the step tag.
 don't use step tags for questions that need only one action, or none.
+on every walkthrough step, also add [CONCEPTS:a, b] after the step tag: one to three short names for the general skill the step exercises, the kind that carries over between apps (like "pivot tables", "layers" or "keyframes"), never the name of a button, menu or tab (not "insert tab"). leave it out when there's no step tag.
 
 multi-step examples:
-- user asks how to make a new folder in file explorer: "click new, up in the top left of the toolbar. [POINT:40,120:new button] [STEP:1/2]"
-- then "i did step 1. what's next?" with the menu open: "now pick folder from that menu. [POINT:70,190:folder] [STEP:2/2]"
+- user asks how to make a new folder in file explorer: "click new, up in the top left of the toolbar. [POINT:40,120:new button] [STEP:1/2] [CONCEPTS:folders]"
+- then "i did step 1. what's next?" with the menu open: "now pick folder from that menu. [POINT:70,190:folder] [STEP:2/2] [CONCEPTS:folders]"
 """
 
 _COORDINATE_SPACES = {
@@ -107,12 +108,13 @@ def walkthrough_reminder(next_step: int | None = None) -> str:
     if next_step is None:
         return (
             "(guide me one step at a time. each click or menu choice is its own step. "
-            "give only the first step, point at it, and end with [STEP:1/N], where N is "
-            "your best guess at the total number of steps.)"
+            "give only the first step, point at it, and end with [STEP:1/N] [CONCEPTS:...], "
+            "where N is your best guess at the total number of steps.)"
         )
     return (
         f"(look at the new screen. give only step {next_step}, point at it, and end with "
-        f"[STEP:{next_step}/N]. if the task is now finished, say so and leave out the step tag.)"
+        f"[STEP:{next_step}/N] [CONCEPTS:...]. if the task is now finished, say so and leave "
+        "out the step and concepts tags.)"
     )
 
 
