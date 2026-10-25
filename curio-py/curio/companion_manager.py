@@ -36,6 +36,7 @@ from curio.config import Config
 from curio.conversation_history import ConversationHistory
 from curio.hands_free import strip_finish_command
 from curio.hotkey import HotkeyMonitor
+from curio.key_finish_watcher import KeyFinishWatcher
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
 from curio.learning_contract import AssistanceLevel, StepOutcome, app_key, task_key
 from curio.learning_events import (
@@ -126,6 +127,7 @@ class CompanionManager(QObject):
         screen_capture_fn: Callable[[], list[ScreenshotImage]],
         panel_visibility_controller: CaptureVisibilityController,
         click_watcher: ClickWatcher | None = None,
+        key_watcher: KeyFinishWatcher | None = None,
         parent: QObject | None = None,
         *,
         memory: ConversationMemory | None = None,
@@ -169,6 +171,12 @@ class CompanionManager(QObject):
         self._walkthrough: StepTag | None = None
         self._click_watcher = click_watcher or ClickWatcher(self)
         self._click_watcher.clicked.connect(self._on_walkthrough_click)
+        # Typing steps finish from the keyboard; taps the hotkey's existing hook.
+        if key_watcher is None and hasattr(hotkey, "typing_enter"):
+            key_watcher = KeyFinishWatcher(hotkey, self)
+        self._key_watcher = key_watcher
+        if self._key_watcher is not None:
+            self._key_watcher.finished.connect(self._on_walkthrough_click)
         self._walkthrough_timeout = QTimer(self)
         self._walkthrough_timeout.setSingleShot(True)
         self._walkthrough_timeout.setInterval(WALKTHROUGH_TIMEOUT_MS)
@@ -506,6 +514,8 @@ class CompanionManager(QObject):
         if step is not None:
             self._walkthrough = step
             self._click_watcher.start()
+            if self._key_watcher is not None:
+                self._key_watcher.start()
             self._walkthrough_timeout.start()
             logger.info(
                 "walkthrough: waiting on step %d (model estimate: %d)", step.index, step.total
@@ -524,6 +534,8 @@ class CompanionManager(QObject):
         was_active = self._walkthrough is not None
         self._walkthrough = None
         self._click_watcher.stop()
+        if self._key_watcher is not None:
+            self._key_watcher.stop()
         self._walkthrough_timeout.stop()
         if was_active:
             logger.info("walkthrough ended")
@@ -538,6 +550,8 @@ class CompanionManager(QObject):
         logger.info("walkthrough: step %d done, fetching the next one", step.index)
         # One click per step; the next answer re-arms the watcher.
         self._click_watcher.stop()
+        if self._key_watcher is not None:
+            self._key_watcher.stop()
         self._walkthrough_timeout.stop()
         self._stop_speaking()
         self._set_state(VoiceState.PROCESSING)

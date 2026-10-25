@@ -117,6 +117,10 @@ class HotkeyMonitor(QObject):
     # floating panel reliably, since Qt focus semantics for frameless
     # Tool windows on Windows 11 don't guarantee keyPressEvent delivery.
     escape_pressed = Signal()
+    # Typing taps for walkthrough steps; carry no key identity. Only emitted
+    # while ``typing_tap_enabled`` is set (a step is waiting).
+    typing_enter = Signal()
+    typing_printable = Signal()
 
     _VALID_BINDINGS: frozenset[str] = frozenset({"ctrl+alt", "right_ctrl"})
 
@@ -132,6 +136,7 @@ class HotkeyMonitor(QObject):
         self._held_vks: dict[str, int] = {}
         self._state: _HotkeyState = _HotkeyState.UNARMED
         self._listener: keyboard.Listener | None = None
+        self.typing_tap_enabled = False
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -183,6 +188,9 @@ class HotkeyMonitor(QObject):
             self._held_vks[name] = vk
         logger.debug("key down %s (state=%s, held=%s)", name, self._state.name, sorted(self._held))
 
+        if self.typing_tap_enabled:
+            self._tap_typing(key, name)
+
         if self._state == _HotkeyState.UNARMED:
             self._prune_released_keys(keep=name)
             if self._is_armed():
@@ -229,6 +237,25 @@ class HotkeyMonitor(QObject):
             if not self._held:
                 self._state = _HotkeyState.UNARMED
             return
+
+    def _tap_typing(self, key: keyboard.Key | keyboard.KeyCode | None, name: str) -> None:
+        """Report typing activity for walkthrough steps (see key_finish_watcher).
+
+        Privacy: only a coarse kind ("enter" / "printable") leaves this method,
+        never which key. Chords with Ctrl/Alt/Win, and anything while the
+        push-to-talk chord is live, are not typing.
+        """
+        if self._state != _HotkeyState.UNARMED:
+            return
+        self._prune_released_keys(keep=name)
+        if self._held & {"ctrl_l", "ctrl_r", "alt", "win"}:
+            return
+        if key == keyboard.Key.enter or getattr(key, "vk", None) == 0x0D:
+            self._post_main("_emit_typing_enter")
+        elif key == keyboard.Key.space or (
+            isinstance(key, keyboard.KeyCode) and key.char is not None and key.char.isprintable()
+        ):
+            self._post_main("_emit_typing_printable")
 
     def _prune_released_keys(self, keep: str | None = None) -> None:
         """Drop held keys whose key-up we never saw.
@@ -313,3 +340,11 @@ class HotkeyMonitor(QObject):
     @Slot()
     def _emit_escape(self) -> None:
         self.escape_pressed.emit()
+
+    @Slot()
+    def _emit_typing_enter(self) -> None:
+        self.typing_enter.emit()
+
+    @Slot()
+    def _emit_typing_printable(self) -> None:
+        self.typing_printable.emit()
