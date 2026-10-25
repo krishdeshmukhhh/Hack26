@@ -1,5 +1,37 @@
 # Progress log
 
+## Walkthrough learning integrated - 2026-10-24
+
+The four parallel workstreams are merged into `feat/learning-integration`:
+event log and wiring (WS1), task map (WS2), map sync server/client/dashboard
+(WS3) and skill model (WS4). Walkthrough steps are recorded with outcomes and
+fanned out to the task map and skill model, and pushed to the map server when
+sharing is on. How-to requests get the verified path and a skill-based
+assistance line. The `[CONCEPTS:...]` tag is parsed and never spoken. New
+config: `[learning]`. New tray entries: Skills…, Share walkthroughs
+anonymously, Open stuck map. New scripts: `curio-map-server` and
+`curio-map-seed`. `curio.spec` bundles `concepts.json` and the dashboard.
+
+Fixed along the way: an error in a walkthrough continuation used to leave the
+walkthrough half-alive with click watching off. It now ends as abandoned.
+Pulled shared paths are re-ranked before merging so the server's best path
+wins over a stale one with more old verifications.
+
+Full suite: **552 passed**. That includes an end-to-end test where laptop A
+finishes a walkthrough, pushes it to a real map server on loopback, and
+laptop B gets the shared path in its prompt, plus a test that repeated
+success lowers the recommended assistance. Ruff is clean on all learning
+files.
+
+Not verified: a live walkthrough with the local model (whether it emits
+CONCEPTS tags reliably and drops pointing when told to hint); two physical
+laptops through Windows Firewall; the frozen PyInstaller build; the Skills
+window inside the running tray app.
+
+Known limitation: the task map keeps each step's *last* attempt. If the
+model's retry was a hint-only answer, the shared step has no element and keeps
+wording like "that didn't open it. click insert again."
+
 ## Tutorial file uploads - 2026-10-24
 
 Added an explicit local file chooser alongside tutorial URL preview. TXT,

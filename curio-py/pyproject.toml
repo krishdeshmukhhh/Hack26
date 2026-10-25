@@ -34,6 +34,8 @@ dev = [
 
 [project.scripts]
 curio = "curio.__main__:main"
+curio-map-server = "curio.map_sync.server:main"
+curio-map-seed = "curio.map_sync.seed:main"
 
 [tool.ruff]
 line-length = 100

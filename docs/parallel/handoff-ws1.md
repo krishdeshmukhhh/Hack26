@@ -1,7 +1,7 @@
 # Handoff: WS1 integration
 
-Branch `feat/learning-integration`. Steps 1–5 of `ws1-integration.md` are
-done. Step 6 (the final wiring) is waiting on WS3 and WS4.
+Branch `feat/learning-integration`. All six steps of `ws1-integration.md`
+are done: WS2–4 are merged and wired in `app._build_learning`.
 
 ## Public API (`from curio.learning_events import ...`)
 
@@ -65,16 +65,31 @@ Tests: 444 pass (37 new across `test_concepts_tag.py`, `test_learning_events.py`
   pointing.
 - The Skills window and the tray toggle have only been tested offscreen.
 
-## Step 6 checklist (when WS3 and WS4 hand off)
+## Step 6 (done)
 
-1. Merge `feat/task-map` (done, see `handoff-ws2.md`), `feat/map-sync` and `feat/skill-model`.
-2. `app._build_learning`: `SqliteTaskMap()` + `await refresh_difficulty()` at
-   startup and `close()` at shutdown. Use the real map sync only when
-   `sync_url` is set. Pass the skill model a `DifficultyProvider` that tries
-   sync first and falls back to `task_map.local_difficulty`.
-3. In `LearningServices._format_path`, replace the local formatter with
-   `curio.task_map.format_for_prompt(path, point_coords, image_size)`. Keep
-   the crowd-difficulty note if WS2's text doesn't already include it.
-4. Swap `SkillsWindow` for WS4's widget. Apply the WS3 requests
-   (dependencies, PyInstaller data, `pyproject` script).
-5. Full suite. Then `ARCHITECTURE.md`, `RUNNING.md`, `PROGRESS.md`.
+- Real `SqliteTaskMap`, `HttpMapSync` (only when `sync_url` is set, otherwise
+  `NullMapSync`) and `SqliteSkillModel` with
+  `FallbackDifficulty(map_sync, task_map.local_difficulty)`.
+  `LearningServices.start()` loads local difficulty and pulls (stats too);
+  `aclose()` drains, then closes the task map and the sync client.
+- Prompt uses WS2's `format_for_prompt`, behind an "untrusted reference
+  data" preamble, with crowd difficulty filled in for unknown steps. The
+  stand-in formatter and placeholder Skills window are deleted; the tray
+  opens WS4's `SkillsWidget`.
+- WS3 requests applied: PyInstaller datas (dashboard assets, plus WS4's
+  `concepts.json`), the `curio-map-server`/`curio-map-seed` scripts, and
+  "Open stuck map". WS3 suggested a separate `[map_sync]` table; the WS1 spec's
+  `[learning] share_walkthroughs / sync_url` covers it, so I didn't add one.
+- WS3's ranking warning is handled in integration (`rank_by_pull_order`).
+
+## Notes for WS2
+
+- `find` ranks shared paths by raw `verified_count`. Integration now clamps
+  lower-ranked pulled paths, but a rank-aware `merge` (or keeping the first
+  path per task) would be the cleaner fix.
+- `clean_steps` keeps the last attempt at a step. When the successful retry
+  was hint-only, the stored step loses its element and keeps apology wording
+  ("that didn't open it. click insert again."). See
+  `tests/test_learning_end_to_end.py`.
+
+Full suite: 552 passed.
