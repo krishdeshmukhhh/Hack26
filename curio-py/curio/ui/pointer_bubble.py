@@ -98,6 +98,7 @@ class PointerBubble(QWidget):
         self._on_typed: Callable[[], None] | None = None
         self._auto_hide_ms: int | None = None
         self._hidden_for_capture = False
+        self._capture_depth = 0
 
         self._type_timer = QTimer(self)
         self._type_timer.setSingleShot(True)
@@ -144,7 +145,9 @@ class PointerBubble(QWidget):
         self._scale = 0.5
         self._resize_for(text)
         self.move_to(anchor)
-        if not self._hidden_for_capture:
+        if self._capture_depth:
+            self._hidden_for_capture = True
+        else:
             self.show()
         self._type_next()
 
@@ -182,14 +185,27 @@ class PointerBubble(QWidget):
         return bool(self._full_text) and (self.isVisible() or self._hidden_for_capture)
 
     def hide_for_capture(self) -> None:
+        self._capture_depth += 1
+        if self._capture_depth > 1:
+            return
         self._hidden_for_capture = self.isVisible()
         if self._hidden_for_capture:
             self.setVisible(False)
 
     def restore_after_capture(self) -> None:
+        if not self._capture_depth:
+            return
+        self._capture_depth -= 1
+        if self._capture_depth:
+            return
         if self._hidden_for_capture:
             self._hidden_for_capture = False
             self.setVisible(True)
+
+    def closeEvent(self, event) -> None:
+        self._capture_depth = 0
+        self.hide_now()
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # Internals

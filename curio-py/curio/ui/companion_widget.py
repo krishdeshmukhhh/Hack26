@@ -40,6 +40,7 @@ from curio.ui.flight import (
     follow_center,
     landing_point,
 )
+from curio.ui.focus_overlay import logical_target
 from curio.ui.pointer_bubble import (
     CURSOR_BLUE,
     ERROR_RED,
@@ -48,6 +49,7 @@ from curio.ui.pointer_bubble import (
     random_pointer_phrase,
     step_caption,
 )
+from curio.ui.target_ring import TargetRingOverlay
 from curio.ui.window_effects import make_overlay_window
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,8 @@ class CompanionWidget(QWidget):
         self._spin_degrees = 0.0
         self._error_flash = False
         self._hidden_for_capture = False
+        self._capture_depth = 0
+        self.target_ring = TargetRingOverlay(self)
 
         # Pointing
         self._hold = False
@@ -152,12 +156,18 @@ class CompanionWidget(QWidget):
         self._transient_timer.setInterval(200)
         self._transient_timer.timeout.connect(self._check_transient_hide)
         self._transient_idle_since: int | None = None
+        self._greeting_timer = QTimer(self)
+        self._greeting_timer.setSingleShot(True)
+        self._greeting_timer.timeout.connect(self._greet)
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def show(self) -> None:
+        if self._capture_depth:
+            self._hidden_for_capture = True
+            return
         self._snap_to_cursor()
         super().show()
         self._frame_timer.start()
@@ -167,9 +177,11 @@ class CompanionWidget(QWidget):
         self._set_opacity(0.0)
         self.show()
         self._animate_opacity(1.0, 2000)
-        QTimer.singleShot(2000, self._greet)
+        self._greeting_timer.start(2000)
 
     def hide(self) -> None:
+        self._hidden_for_capture = False
+        self.target_ring.clear()
         self._frame_timer.stop()
         self.bubble.hide_now()
         super().hide()
@@ -178,16 +190,40 @@ class CompanionWidget(QWidget):
         make_overlay_window(self)
 
     def hide_for_capture(self) -> None:
+        self._capture_depth += 1
+        if self._capture_depth > 1:
+            return
+        self.target_ring.hide_for_capture()
         self._hidden_for_capture = self.isVisible()
         if self._hidden_for_capture:
             self.setVisible(False)
         self.bubble.hide_for_capture()
 
     def restore_after_capture(self) -> None:
+        if not self._capture_depth:
+            return
+        self._capture_depth -= 1
+        if self._capture_depth:
+            return
         if self._hidden_for_capture:
             self._hidden_for_capture = False
             self.setVisible(True)
+            self._frame_timer.start()
         self.bubble.restore_after_capture()
+        self.target_ring.restore_after_capture()
+
+    def closeEvent(self, event) -> None:
+        self._hidden_for_capture = False
+        self._capture_depth = 0
+        self._frame_timer.stop()
+        self._point_timer.stop()
+        self._error_timer.stop()
+        self._transient_timer.stop()
+        self._fade_anim.stop()
+        self._greeting_timer.stop()
+        self.target_ring.close()
+        self.bubble.close()
+        super().closeEvent(event)
 
     def set_cursor_enabled(self, enabled: bool) -> None:
         """Tray toggle. Off: hidden except during an interaction."""
@@ -259,6 +295,8 @@ class CompanionWidget(QWidget):
         ``hold`` keeps the buddy there (walkthrough step) until
         ``release_hold``; ``step`` adds "(k/n)" to the pointer phrase.
         """
+        _, point = self._point_at(x, y)
+        x, y = point.x(), point.y()
         self._point_timer.stop()
         self.bubble.hide_now()
         self._hold = hold
@@ -268,6 +306,11 @@ class CompanionWidget(QWidget):
         self._mode = _Mode.FLYING
         self._start_flight(dest, self._arrive_at_target)
         logger.info("fly_to: (%d, %d)%s", x, y, " [hold]" if hold else "")
+
+    def _point_at(self, x: int, y: int):
+        """Pulse once at the physical POINT, then convert only the pet's placement."""
+        self.target_ring.pulse_at(x, y)
+        return logical_target(x, y)
 
     def release_hold(self) -> None:
         """End a walkthrough hold: fade the pill and fly back."""
@@ -312,6 +355,7 @@ class CompanionWidget(QWidget):
         self._flight_scale = 1.0
 
     def _cancel_pointing(self) -> None:
+        self.target_ring.clear()
         self._point_timer.stop()
         self._flight_done = None
         self._hold = False

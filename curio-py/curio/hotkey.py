@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import threading
 from enum import Enum, auto
 
 from pynput import keyboard
-from PySide6.QtCore import QMetaObject, QObject, Qt, Signal, Slot
-
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,8 @@ class HotkeyMonitor(QObject):
     # floating panel reliably, since Qt focus semantics for frameless
     # Tool windows on Windows 11 don't guarantee keyPressEvent delivery.
     escape_pressed = Signal()
+    selection_cancelled = Signal()
+    _input_event = Signal(object)
 
     _VALID_BINDINGS: frozenset[str] = frozenset({"ctrl+alt", "right_ctrl"})
 
@@ -132,6 +134,11 @@ class HotkeyMonitor(QObject):
         self._held_vks: dict[str, int] = {}
         self._state: _HotkeyState = _HotkeyState.UNARMED
         self._listener: keyboard.Listener | None = None
+        self._input_lock = threading.RLock()
+        self._chord_serial = 0
+        self._suppressed_chords: set[int] = set()
+        self._lifecycle = 0
+        self._input_event.connect(self._deliver_input, Qt.ConnectionType.QueuedConnection)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -140,25 +147,52 @@ class HotkeyMonitor(QObject):
         """Install the global keyboard hook. Idempotent."""
         if self._listener is not None:
             return
+        lifecycle = self._lifecycle
+
+        def guarded(callback):
+            def invoke(key):
+                with self._input_lock:
+                    if self._listener is not None and lifecycle == self._lifecycle:
+                        callback(key)
+            return invoke
+
         self._listener = keyboard.Listener(
-            on_press=self._on_press, on_release=self._on_release
+            on_press=guarded(self._on_press), on_release=guarded(self._on_release)
         )
         self._listener.start()
 
     def stop(self) -> None:
         """Remove the global keyboard hook and reset internal state."""
-        listener = self._listener
-        self._listener = None
+        with self._input_lock:
+            listener = self._listener
+            self._listener = None
+            self._held.clear()
+            self._held_vks.clear()
+            self._state = _HotkeyState.UNARMED
+            self._lifecycle += 1
+            self._suppressed_chords.clear()
         if listener is not None:
             listener.stop()
-        self._held.clear()
-        self._held_vks.clear()
-        self._state = _HotkeyState.UNARMED
+
+    def suppress_for_selection(self) -> None:
+        """Input-thread arbitration: invalidate even already-queued chord events.
+
+        No Qt widget/manager calls here. Selection owns the mouse hook and calls
+        this before suppressing the native press, regardless of the voice binding.
+        """
+        with self._input_lock:
+            self._suppressed_chords.add(self._chord_serial)
+            self._state = _HotkeyState.CANCELLED
+            self._post_main("_emit_selection_cancelled")
 
     # ------------------------------------------------------------------
     # pynput callbacks (run on the listener's background thread)
     # ------------------------------------------------------------------
     def _on_press(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
+        with self._input_lock:
+            self._handle_press(key)
+
+    def _handle_press(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         # Escape is a special global signal for the UI layer (panel
         # dismissal). Emit it on every fresh press regardless of hotkey
         # state; auto-repeat is filtered below.
@@ -186,6 +220,7 @@ class HotkeyMonitor(QObject):
         if self._state == _HotkeyState.UNARMED:
             self._prune_released_keys(keep=name)
             if self._is_armed():
+                self._chord_serial += 1
                 self._state = _HotkeyState.ARMED
                 self._post_main("_emit_pressed")
             return
@@ -202,6 +237,10 @@ class HotkeyMonitor(QObject):
         # CANCELLED — absorb further presses until everything is lifted.
 
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
+        with self._input_lock:
+            self._handle_release(key)
+
+    def _handle_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         if key == keyboard.Key.esc:
             self._held.discard("esc")
             return
@@ -286,7 +325,7 @@ class HotkeyMonitor(QObject):
     # thread-safe signal emission
     # ------------------------------------------------------------------
     # pynput callbacks run on the listener's background thread. We
-    # marshal onto the main thread with QMetaObject.invokeMethod using
+    # marshal onto the main thread with _input_event using
     # a queued connection so that the slot (and therefore the signal
     # emit it performs) runs on the thread this QObject lives in —
     # normally the main thread. QTimer.singleShot does NOT work here
@@ -294,9 +333,26 @@ class HotkeyMonitor(QObject):
     # which pynput's background thread does not have.
 
     def _post_main(self, slot_name: str) -> None:
-        QMetaObject.invokeMethod(
-            self, slot_name, Qt.ConnectionType.QueuedConnection
-        )
+        self._input_event.emit((self._lifecycle, self._chord_serial, slot_name))
+
+    @Slot(object)
+    def _deliver_input(self, event) -> None:
+        lifecycle, serial, slot_name = event
+        if lifecycle != self._lifecycle:
+            return
+        with self._input_lock:
+            suppressed = serial in self._suppressed_chords
+            if slot_name == "_emit_pressed" and not suppressed:
+                self._suppressed_chords.difference_update(
+                    s for s in tuple(self._suppressed_chords) if s < serial
+                )
+        if suppressed and slot_name in ("_emit_pressed", "_emit_released", "_emit_cancelled"):
+            return
+        getattr(self, slot_name)()
+
+    @Slot()
+    def _emit_selection_cancelled(self) -> None:
+        self.selection_cancelled.emit()
 
     @Slot()
     def _emit_pressed(self) -> None:

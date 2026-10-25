@@ -1,5 +1,37 @@
 # Running Curio
 
+## Focus a screen area and ask about it
+
+Hold **Ctrl+Alt**, press the **left mouse button**, and drag a box around what
+you want to ask about. Release the mouse button to keep the blue highlighted
+rectangle. You can release the modifiers during the drag. Reverse drags work;
+the box stays on the display where you started and must be at least 8 by 8
+physical pixels. Escape cancels a drag; a cancelled or tiny replacement keeps
+the previous box.
+
+Drawing cancels any voice recording started by that Ctrl+Alt chord. Release
+the keys, then hold your configured voice shortcut again to ask a question.
+Ctrl+Alt without a mouse drag still records normally; `right_ctrl` and
+hands-free questions also use the selected area. Each question captures fresh
+contents, and the box remains across questions. Small areas inherit the
+resolution of the app's downscaled screenshot.
+
+An ordinary left click clears the box and keeps its usual application action.
+During a guided walkthrough, drawing a box does not complete the pending step;
+an ordinary clearing click can complete it.
+
+When Curio points, three light blue rings expand and fade at the exact target
+over about 1.5 seconds. The pet sits beside that target. A new target replaces
+the old animation. The focus box, target rings, pet and speech bubble are hidden
+during screenshots and restored afterward as appropriate. Explicit coaching
+screen-share buttons use the selected area too; coaching replies themselves do
+not execute POINT tags.
+
+Automated checks cover input ordering, capture cleanup, crop coordinates and
+overlay lifecycle. Mixed-DPI visuals, click-through over other applications,
+real microphone/TTS behavior and elevated Windows applications still need
+interactive verification.
+
 ## Hackathon preflight and evidence
 
 See [readiness register](hackathon-readiness.md),

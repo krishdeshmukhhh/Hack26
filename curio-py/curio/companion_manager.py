@@ -17,6 +17,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from contextlib import suppress
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -34,6 +35,8 @@ from curio.clients.whisper_transcription_client import WhisperTranscriptionClien
 from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.config import Config
 from curio.conversation_history import ConversationHistory
+from curio.focus_capture import focus_screenshots
+from curio.focus_selection import FocusRegion, FocusSelectionController
 from curio.hands_free import strip_finish_command
 from curio.hotkey import HotkeyMonitor
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
@@ -146,6 +149,11 @@ class CompanionManager(QObject):
         self._tts = tts
         self._screen_capture_fn = screen_capture_fn
         self._panel_visibility_controller = panel_visibility_controller
+        self._focus_selection: FocusSelectionController | None = None
+        self._capture_lock = asyncio.Lock()
+        self._selection_cancelled = False
+        self._transcription_waiting = False
+        self._transcription_stops: set[asyncio.Task] = set()
 
         # Internal state
         self._state: VoiceState = VoiceState.IDLE
@@ -209,6 +217,78 @@ class CompanionManager(QObject):
         self._current_model = model_id
         if self._coaching is not None:
             self._coaching.set_model(model_id)
+
+    def attach_focus_selection(self, selection: FocusSelectionController) -> None:
+        """Attach the selection owner without changing legacy fake input contracts."""
+        self._focus_selection = selection
+        if hasattr(self._click_watcher, "set_click_source"):
+            self._click_watcher.set_click_source(selection)
+
+    def cancel_for_selection(self) -> None:
+        """Cancel this voice chord and keep the pending walkthrough step intact."""
+        self._selection_cancelled = True
+        self._on_hotkey_cancelled(preserve_walkthrough=True)
+
+    async def capture_screenshots(self) -> list[ScreenshotImage]:
+        """Fresh focused capture shared by ordinary turns and explicit coaching capture."""
+        region = self._focus_selection.region if self._focus_selection is not None else None
+        return await self._capture_screenshots(region)
+
+    async def _capture_screenshots(self, region: FocusRegion | None) -> list[ScreenshotImage]:
+        # Serialize ALL screenshot paths so one cannot restore another's overlays.
+        async with self._capture_lock:
+            controllers = [self._panel_visibility_controller]
+            if self._focus_selection is not None:
+                controllers.append(self._focus_selection)
+            hidden = []
+            try:
+                for controller in controllers:
+                    hidden.append(controller)
+                    controller.hide_for_capture()
+                await asyncio.sleep(0.05)
+                task = asyncio.create_task(asyncio.to_thread(self._screen_capture_fn))
+                try:
+                    shots = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    # Cancelling to_thread does not stop native capture. Keep overlays
+                    # hidden until the worker really finishes, even on cancellation.
+                    while not task.done():
+                        try:
+                            await asyncio.shield(task)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    with suppress(Exception):
+                        task.result()
+                    raise
+                return focus_screenshots(shots, region)
+            finally:
+                for controller in reversed(hidden):
+                    controller.restore_after_capture()
+
+    async def aclose(self) -> None:
+        """Retire asynchronous work and walkthrough timers before Qt shuts down."""
+        self._generation += 1
+        self._cancel_flag = True
+        self._selection_cancelled = True
+        self._click_watcher.stop()
+        self._walkthrough_timeout.stop()
+        self._mic.stop()
+        self._stop_pcm_bridge()
+        self._stop_speaking()
+        if isinstance(self._transcription, WhisperTranscriptionClient):
+            self._transcription.cancel_stream()
+        else:
+            self._queue_transcription_stop()
+        tasks = [t for t in (self._current_task, self._speak_task)
+                 if t is not None and not t.done()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tuple(self._transcription_stops), return_exceptions=True)
+        async with self._capture_lock:
+            pass  # A previously cancelled turn may still be retiring native capture.
 
     def attach_coaching(self, runtime: CoachingRuntime) -> None:
         """Attach exactly one router; it is the sole coaching transcript consumer."""
@@ -315,14 +395,17 @@ class CompanionManager(QObject):
         logger.debug("hotkey pressed (state=%s)", self._state)
         self._hands_free_recording = False
         self._strip_hands_free_command = False
+        self._selection_cancelled = False
 
         self._generation += 1
         if self._coaching is not None:
             self._coaching.interrupt()
         self.speaking_changed.emit(False)
 
-        # A new question ends any walkthrough in progress.
-        self._end_walkthrough()
+        # Pause until a transcript confirms this is a question. Ctrl+Alt may
+        # instead become a selection gesture; that must retain the current step.
+        self._click_watcher.stop()
+        self._walkthrough_timeout.stop()
         self._stop_speaking()
 
         # Interrupt any in-flight turn OR lingering stream task.
@@ -338,27 +421,44 @@ class CompanionManager(QObject):
         self._set_state(VoiceState.LISTENING)
         self._mic.start()
 
-        self._current_task = asyncio.ensure_future(
-            self._transcription.start_stream(self._pcm_async_generator())
-        )
+        self._transcription_waiting = True
+        self._current_task = asyncio.ensure_future(self._start_transcription(
+            self._generation, tuple(self._transcription_stops)
+        ))
+
+    async def _start_transcription(self, generation: int, cleanup: tuple) -> None:
+        # A cancelled remote stop can still emit a final transcript. Drain it
+        # before opening the new session, with transcript acceptance paused.
+        if cleanup:
+            await asyncio.shield(asyncio.gather(*cleanup, return_exceptions=True))
+        if generation != self._generation:
+            return
+        self._transcription_waiting = False
+        await self._transcription.start_stream(self._pcm_async_generator())
+
+    def _queue_transcription_stop(self) -> None:
+        task = asyncio.ensure_future(self._transcription.stop_stream())
+        self._transcription_stops.add(task)
+        task.add_done_callback(self._transcription_stops.discard)
 
     def _on_hotkey_released(self) -> None:
-        if self._hands_free_recording:
+        if self._hands_free_recording or self._selection_cancelled:
             return
         logger.debug("hotkey released")
         self._set_state(VoiceState.PROCESSING)
         self._mic.stop()
         self._stop_pcm_bridge()
-        asyncio.ensure_future(self._transcription.stop_stream())
+        self._queue_transcription_stop()
 
-    def _on_hotkey_cancelled(self) -> None:
+    def _on_hotkey_cancelled(self, *, preserve_walkthrough: bool = False) -> None:
         logger.debug("hotkey cancelled")
         hands_free = self._hands_free_recording
         self._hands_free_recording = False
         self._generation += 1
         if self._coaching is not None:
             self._coaching.interrupt()
-        self._end_walkthrough()
+        if not preserve_walkthrough:
+            self._end_walkthrough()
         self._cancel_flag = True
         self._speech = None
         self._tts.stop()
@@ -369,13 +469,20 @@ class CompanionManager(QObject):
             self._current_task.cancel()
         self._mic.stop()
         self._stop_pcm_bridge()
-        if hands_free and isinstance(self._transcription, WhisperTranscriptionClient):
+        if (hands_free or preserve_walkthrough) and isinstance(
+            self._transcription, WhisperTranscriptionClient
+        ):
             self._transcription.cancel_stream()
         else:
-            asyncio.ensure_future(self._transcription.stop_stream())
+            self._queue_transcription_stop()
         # Transition to IDLE directly — the transcription client may not
         # emit a final_transcript if the session never fully started.
-        self._set_state(VoiceState.IDLE)
+        if preserve_walkthrough and self._walkthrough is not None:
+            self._click_watcher.start()
+            self._walkthrough_timeout.start()
+            self._set_state(VoiceState.GUIDING)
+        else:
+            self._set_state(VoiceState.IDLE)
 
     def begin_hands_free(self) -> None:
         """Start the same recording pipeline as push-to-talk, without a key."""
@@ -399,6 +506,8 @@ class CompanionManager(QObject):
     # ------------------------------------------------------------------
 
     def _on_final_transcript(self, text: str) -> None:
+        if self._selection_cancelled or self._transcription_waiting:
+            return
         if self._strip_hands_free_command:
             text = strip_finish_command(text)
             self._strip_hands_free_command = False
@@ -409,8 +518,11 @@ class CompanionManager(QObject):
             return
         if not text:
             # User pressed and released without speaking enough.
+            self._end_walkthrough()
             self._set_state(VoiceState.IDLE)
             return
+
+        self._end_walkthrough()
 
         # Reset cancel flag here (not in _run_turn) so a rapid
         # press between task assignment and coroutine start cannot
@@ -727,6 +839,7 @@ class CompanionManager(QObject):
         via ``_cancel_flag`` (cooperative) and ``task.cancel()`` (hard).
         """
         generation = self._generation if generation is None else generation
+        focus_region = self._focus_selection.region if self._focus_selection is not None else None
         try:
             # Yield control so stop_stream (which is still draining after
             # the recv loop emitted final_transcript synchronously) can
@@ -754,13 +867,10 @@ class CompanionManager(QObject):
                 # The async sleep lets qasync process the Qt opacity change
                 # AND lets pending asyncio tasks (stop_stream cleanup) settle
                 # — avoids re-entrancy that processEvents() would cause.
-                self._panel_visibility_controller.hide_for_capture()
-                await asyncio.sleep(0.05)
-                try:
-                    screenshots = await asyncio.to_thread(self._screen_capture_fn)
-                    self._current_screenshots = screenshots
-                finally:
-                    self._panel_visibility_controller.restore_after_capture()
+                screenshots = await self._capture_screenshots(focus_region)
+                if generation != self._generation or self._cancel_flag:
+                    return
+                self._current_screenshots = screenshots
                 self._mark("captured")
 
                 # Build image content blocks. The window list (~1 ms of Win32 calls,
@@ -786,6 +896,13 @@ class CompanionManager(QObject):
                 # Build messages from conversation history. Walkthrough reminders
                 # go only into this request, not into the stored history.
                 request_text = text
+                if screenshots and "selected focus area" in screenshots[0].label:
+                    image_blocks.append({
+                        "type": "text",
+                        "text": "The user selected this focus area as the subject of the question. "
+                                "Use the fresh selected image, and give POINT coordinates within "
+                                "this image using its stated dimensions and coordinate mode.",
+                    })
                 if continuing_step is not None:
                     request_text = f"{text}\n{walkthrough_reminder(continuing_step + 1)}"
                 elif is_howto_question(text):
@@ -886,7 +1003,7 @@ class CompanionManager(QObject):
                 self._update_walkthrough(step)
                 if point_tag is not None:
                     coords = map_point_to_screen(
-                        point_tag, self._current_screenshots, self._config.point_coords
+                        point_tag, screenshots, self._config.point_coords
                     )
                     if coords is not None:
                         self._panel_visibility_controller.fly_to(

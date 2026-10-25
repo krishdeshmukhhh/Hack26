@@ -17,7 +17,7 @@ from pathlib import Path
 
 import qasync
 from platformdirs import user_config_dir, user_log_dir
-from PySide6.QtCore import QEvent, QUrl
+from PySide6.QtCore import QEvent, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
@@ -31,6 +31,7 @@ from curio.clients.whisper_transcription_client import WhisperTranscriptionClien
 from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.companion_manager import CompanionManager
 from curio.config import Config, ConfigError, save_share_walkthroughs
+from curio.focus_selection import FocusSelectionController
 from curio.hands_free import HandsFreeController
 from curio.hotkey import HotkeyMonitor
 from curio.learning_events import (
@@ -206,6 +207,18 @@ def run() -> int:
     # ------------------------------------------------------------------
     hotkey_binding = result.config.hotkey if result.config is not None else "ctrl+alt"
     hotkey_monitor = HotkeyMonitor(binding=hotkey_binding)
+    focus_selection = FocusSelectionController()
+    focus_selection.selection_input_started.connect(
+        hotkey_monitor.suppress_for_selection, Qt.ConnectionType.DirectConnection
+    )
+    shutting_down = False
+
+    def stop_input() -> None:
+        nonlocal shutting_down
+        shutting_down = True
+        focus_selection.stop()
+        hotkey_monitor.stop()
+        companion.close()
 
     # ------------------------------------------------------------------
     # CompanionManager (only when config loaded successfully)
@@ -281,6 +294,8 @@ def run() -> int:
             memory=memory_runtime.conversation,
             learning=learning,
         )
+        manager.attach_focus_selection(focus_selection)
+        hotkey_monitor.selection_cancelled.connect(manager.cancel_for_selection)
         if local is not None:
             hands_free = HandsFreeController(manager, mic, hotkey_monitor)
             tray_icon.set_hands_free_available(True)
@@ -297,16 +312,15 @@ def run() -> int:
                 mode = coaching_runtime.mode
                 visible = [w for w in (coaching_window, history, memory_window)
                            if w is not None and w.isVisible()]
-                companion.hide_for_capture()
-                for window in visible:
-                    window.hide()
                 try:
-                    await asyncio.sleep(0.05)
-                    return await asyncio.to_thread(capture_all)
-                finally:
-                    companion.restore_after_capture()
                     for window in visible:
-                        if window is not coaching_window or coaching_runtime.mode == mode:
+                        window.hide()
+                    return await manager.capture_screenshots()
+                finally:
+                    for window in visible:
+                        if not shutting_down and (
+                            window is not coaching_window or coaching_runtime.mode == mode
+                        ):
                             window.show()
 
         coaching_runtime = CoachingRuntime(
@@ -361,6 +375,7 @@ def run() -> int:
         manager.error.connect(history.show_error)
 
     hotkey_monitor.start()
+    focus_selection.start()
     tray_icon.show()
     # Tray "Show Curio" toggle (persisted).
     tray_icon.show_cursor_toggled.connect(companion.set_cursor_enabled)
@@ -376,8 +391,7 @@ def run() -> int:
     # Ensure the pynput listener thread is stopped before the app exits,
     # otherwise Python may hang on interpreter shutdown waiting for it
     # (pynput's helper thread is not always daemonic on Windows).
-    result.app.aboutToQuit.connect(hotkey_monitor.stop)
-    result.app.aboutToQuit.connect(companion.hide)
+    result.app.aboutToQuit.connect(stop_input)
 
     # Use qasync to bridge the Qt event loop with asyncio so that
     # asyncio.create_task / ensure_future work inside Qt signal handlers.
@@ -398,8 +412,13 @@ def run() -> int:
         if learning is not None:
             loop.create_task(learning.start())
         loop.run_forever()
+        stop_input()
         if hands_free is not None:
             hands_free.close()
+        if coaching_runtime is not None:
+            manager.detach_coaching()
+        if result.config is not None:
+            loop.run_until_complete(manager.aclose())
         mic.stop()
         if learning is not None:
             if skills_window is not None:
@@ -408,7 +427,6 @@ def run() -> int:
         if coaching_window is not None:
             loop.run_until_complete(coaching_window.aclose())
         if coaching_runtime is not None:
-            manager.detach_coaching()
             loop.run_until_complete(coaching_runtime.aclose())
             result.app.aboutToQuit.disconnect(coaching_runtime.interrupt)
             coaching_window.deleteLater()
@@ -418,4 +436,5 @@ def run() -> int:
             memory_window.close()
         if memory_runtime is not None:
             loop.run_until_complete(memory_runtime.close())
+    result.app.aboutToQuit.disconnect(stop_input)
     return 0

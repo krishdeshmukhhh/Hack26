@@ -119,9 +119,10 @@ class PetCompanionWidget(CompanionWidget):
     def fly_to(self, x: int, y: int, *, hold: bool = False, step=None):
         if self.catalog is None:
             return super().fly_to(x, y, hold=hold, step=step)
-        screen = QApplication.screenAt(QPoint(x, y))
+        screen, point = self._point_at(x, y)
         if screen is None:
             return
+        x, y = point.x(), point.y()
         self._point_screen = screen
         self._point_coords = (x, y)
         self._hold = hold
@@ -254,7 +255,7 @@ class PetCompanionWidget(CompanionWidget):
             x -= self.x()
             y -= self.y()
             painter.setPen(QColor("#4a9eff"))
-            painter.drawEllipse(QPoint(x, y), 5, 5)
+            painter.drawEllipse(QPointF(x, y), 5, 5)
         # Beside the pet: the listening waveform and thinking spinner from the
         # base widget. While speaking, the pet's own animation carries it.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

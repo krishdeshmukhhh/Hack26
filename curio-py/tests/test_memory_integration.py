@@ -240,6 +240,11 @@ def test_app_initializes_shared_runtime_and_closes_it(qt_application, tmp_path, 
         error = Signal(str)
 
     class Hotkey(FakeHotkey):
+        selection_cancelled = Signal()
+
+        def suppress_for_selection(self):
+            pass
+
         def __init__(self, **kwargs):
             super().__init__()
 
@@ -268,6 +273,8 @@ def test_app_initializes_shared_runtime_and_closes_it(qt_application, tmp_path, 
     monkeypatch.setattr(application.signal, "signal", lambda *args: None)
     monkeypatch.setattr(application, "MicCapture", Mic)
     monkeypatch.setattr(application, "HotkeyMonitor", Hotkey)
+    selection = MagicMock()
+    monkeypatch.setattr(application, "FocusSelectionController", lambda: selection)
     monkeypatch.setattr(application, "TranscriptionClient", lambda **kwargs: FakeTranscription())
     monkeypatch.setattr(application, "LLMClient", lambda **kwargs: FakeLLM([]))
     monkeypatch.setattr(application, "TTSClient", lambda **kwargs: FakeTTS())
@@ -292,6 +299,8 @@ def test_app_initializes_shared_runtime_and_closes_it(qt_application, tmp_path, 
 
     monkeypatch.setattr(application.qasync, "QEventLoop", make_loop)
     assert application.run() == 0
+    selection.start.assert_called_once()
+    selection.stop.assert_called()  # Qt may emit aboutToQuit across nested cleanup loops.
     assert len(runtimes) == 1
     assert runtimes[0]._store._closed
     tray.show_memory_requested.connect.assert_called()
