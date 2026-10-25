@@ -1,5 +1,43 @@
 # Architecture
 
+## Focus and study sessions
+
+With `[focus] enabled = true` (default), `app.py` calls `build_focus_mode` in
+`focus_session/wiring.py` and attaches its `FocusIntegration` to the manager.
+The builder connects `WindowsActivitySource` → `RuleFirstClassifier` →
+`ThresholdDriftTracker` → `AdaptiveFocusPolicy` → `FocusPresenter`, coordinated
+by `FocusRuntime` on Qt/qasync. Sensing starts only with a session. Samples are
+processed sequentially; policy responses and false-alarm corrections feed back
+into the policy/classifier. The presenter uses existing TTS through `manager.say`
+and public pet `play_clip` reactions. Tray controls open planning/history or end
+the session; windows show the timeline, reflection and review quiz.
+
+`FocusIntegration` consumes ordinary-mode start/end/break requests and card
+replies before normal voice turns. Learner-initiated study help gets a per-request
+`EvidenceBasedCoach` directive using available task-map concepts and estimated
+mastery. Hints/questions suppress walkthrough tags; partial steps and worked
+examples can retain them. Automatic step continuations keep the existing flow.
+Walkthrough events supply concepts, coach events and resume context through
+`runtime.set_context`; the policy snapshots that context at drift onset. GUI
+progress remains model-reported rather than independently checked.
+
+A dedicated configured LLM client serves text-only focus requests independently
+of the voice stream. `model_judgments = false` disables title classification by
+the model, while suggestions, policy wording and review generation can still use
+it. Active sampling reads app identity, window title, idle/input activity and
+switch timing; unresolved judgments may send goal/app/title to the configured
+backend. Focus sensing itself captures no images or keystroke content.
+
+Three worker-backed local SQLite stores hold summaries (`focus_sessions.sqlite3`),
+corrections including normalized title patterns (`focus_corrections.sqlite3`),
+and scheduled questions (`study_reviews.sqlite3`). Raw activity samples are not
+persisted. Focus history's confirmed delete-all clears all three. Memory's
+adaptive interaction frequency can tune policy at session start; QSettings keeps
+seen wording variants across restarts. Shutdown detaches the integration,
+awaits runtime cancellation, disposes UI and closes the stores.
+See [focus-session.md](focus-session.md) for APIs and privacy details, and
+[RUNNING.md](RUNNING.md#focus-and-study-sessions) for configuration and usage.
+
 ## Readiness provenance integration
 
 Shared StepEvent carries evidence_basis, a local-only opaque evidence_ref and

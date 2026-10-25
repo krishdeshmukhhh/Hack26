@@ -1,5 +1,35 @@
 # Progress log
 
+## Focus-session wiring and documentation - 2026-10-25
+
+Focus sessions are connected to app startup/shutdown, validated `[focus]`
+settings, tray start/end/history controls and the normal voice pipeline.
+`build_focus_mode` constructs the real Windows sensor, rule-first classifier,
+drift tracker, adaptive policy, study coach, presenter and session windows.
+Walkthrough steps push resume context through `runtime.set_context`, record
+concepts and feed coach events. Learner-initiated study help receives a per-turn
+tutor directive; automatic walkthrough continuations retain their existing flow.
+Opening questions, due-review offers, breaks, reflection and review quizzes are
+handled by the runtime/UI. Pet reactions use the public `play_clip` method.
+
+Three local SQLite stores hold summaries, false-alarm corrections and review
+schedules; confirmed history deletion clears all three. Policy wording variants
+persist in QSettings, and enabled memory can supply interaction frequency at
+session start. Focus has a dedicated model client: `model_judgments = false`
+gates title classification only, not other focus model requests.
+
+Updated [focus-session.md](focus-session.md), [ARCHITECTURE.md](ARCHITECTURE.md)
+and [RUNNING.md](RUNNING.md#focus-and-study-sessions) to describe the implemented
+wiring and current APIs. Privacy guidance now distinguishes transient app/title/
+input-activity sampling, optional model title requests, saved summaries and
+locally retained normalized title patterns in corrections.
+
+Existing automated suites cover runtime/presenter behavior, temporary-database
+storage, integration routing/directives, configuration, tray controls and real
+service construction without a model. This documentation update adds no live
+desktop or provider verification. Physical sensing, audible TTS, pet behavior,
+live inference and packaged startup remain manual acceptance checks.
+
 ## Updated four-worker handoffs integrated - 2026-10-24
 
 Preserved dirty readiness work and reviewed the four updated handoffs. See
