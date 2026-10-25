@@ -7,6 +7,7 @@ worker URL (so the panel can surface a clear first-run warning).
 
 from __future__ import annotations
 
+import re
 import shutil
 import tomllib
 from dataclasses import dataclass, field
@@ -100,6 +101,79 @@ class LocalConfig:
 
 
 @dataclass(frozen=True)
+class LearningSettings:
+    """``[learning]``: walkthrough event log, task map, skill model and map sync."""
+
+    enabled: bool = True
+    # Push anonymous walkthrough summaries to the map server. Off by default.
+    share_walkthroughs: bool = False
+    # Map server base URL; empty disables syncing entirely.
+    sync_url: str = ""
+
+    @classmethod
+    def from_dict(cls, data: object) -> LearningSettings:
+        if not isinstance(data, dict):
+            raise ConfigError("[learning] must be a table")
+        defaults = cls()
+        values: dict[str, object] = {}
+        for key in ("enabled", "share_walkthroughs"):
+            value = data.get(key, getattr(defaults, key))
+            if not isinstance(value, bool):
+                raise ConfigError(f"learning.{key} must be a boolean")
+            values[key] = value
+        sync_url = data.get("sync_url", defaults.sync_url)
+        if not isinstance(sync_url, str):
+            raise ConfigError("learning.sync_url must be a string")
+        sync_url = sync_url.strip()
+        if sync_url and not sync_url.startswith(("http://", "https://")):
+            raise ConfigError("learning.sync_url must start with http:// or https://")
+        values["sync_url"] = sync_url.rstrip("/")
+        return cls(**values)
+
+
+def save_share_walkthroughs(path: Path, enabled: bool) -> None:
+    """Change only ``[learning] share_walkthroughs``, keeping comments and other settings.
+
+    Same approach as ``save_pet_selection``: edit the text, check that the
+    parsed result changed only that key, then replace the file atomically.
+    """
+    raw = path.read_bytes()
+    text = raw.decode("utf-8")
+    data = tomllib.loads(text)
+    value = "true" if enabled else "false"
+    newline = "\r\n" if "\r\n" in text else "\n"
+    section = re.search(r"(?m)^[ \t]*\[learning\][ \t]*(?:#[^\r\n]*)?(?=\r?$)", text)
+    if section:
+        following = re.search(r"(?m)^[ \t]*\[", text[section.end() :])
+        end = section.end() + following.start() if following else len(text)
+        body = text[section.end() : end]
+        entry = re.search(r"(?m)^([ \t]*share_walkthroughs[ \t]*=[ \t]*)(?:true|false)", body)
+        if entry:
+            body = body[: entry.start()] + entry.group(1) + value + body[entry.end() :]
+        else:
+            body = newline + f"share_walkthroughs = {value}" + body
+        updated = text[: section.end()] + body + text[end:]
+    elif "learning" not in data:
+        updated = text + ("" if text.endswith("\n") else newline)
+        updated += newline + "[learning]" + newline + f"share_walkthroughs = {value}" + newline
+    else:
+        raise ConfigError(
+            "Sharing toggle requires a [learning] table; edit Settings to change inline tables"
+        )
+    parsed = tomllib.loads(updated)
+    expected = dict(data)
+    expected["learning"] = dict(data.get("learning", {}), share_walkthroughs=enabled)
+    if parsed != expected:
+        raise ConfigError("Cannot safely update the sharing setting in this configuration layout")
+    temporary = path.with_name(path.name + ".learning.tmp")
+    try:
+        temporary.write_bytes(updated.encode("utf-8"))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
 class Config:
     worker_url: str
     hotkey: str
@@ -110,6 +184,7 @@ class Config:
     local: LocalConfig | None = None
     pet: PetSettings = field(default_factory=PetSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
+    learning: LearningSettings = field(default_factory=LearningSettings)
 
     @property
     def point_coords(self) -> str:
@@ -183,6 +258,7 @@ class Config:
             memory = parse_memory_settings(data.get("memory", {}))
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
+        learning = LearningSettings.from_dict(data.get("learning", {}))
 
         return cls(
             worker_url=worker_url if isinstance(worker_url, str) else "",
@@ -194,6 +270,7 @@ class Config:
             local=local,
             pet=pet,
             memory=memory,
+            learning=learning,
         )
 
     @staticmethod

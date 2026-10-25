@@ -35,10 +35,23 @@ from curio.config import Config
 from curio.conversation_history import ConversationHistory
 from curio.hotkey import HotkeyMonitor
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
+from curio.learning_contract import AssistanceLevel, StepOutcome, app_key, task_key
+from curio.learning_events import (
+    LearningServices,
+    PendingStep,
+    WalkthroughRecorder,
+    element_from_point,
+)
 from curio.memory_conversation import ConversationMemory
 from curio.mic_capture import MicCapture
 from curio.point_mapper import map_point_to_screen
-from curio.point_parser import StepTag, parse_point_tag, parse_step_tag
+from curio.point_parser import (
+    PointTag,
+    StepTag,
+    parse_concepts_tag,
+    parse_point_tag,
+    parse_step_tag,
+)
 from curio.prompts import build_system_prompt, is_howto_question, walkthrough_reminder
 from curio.screen_capture import ScreenshotImage
 from curio.state import VoiceState
@@ -112,10 +125,14 @@ class CompanionManager(QObject):
         parent: QObject | None = None,
         *,
         memory: ConversationMemory | None = None,
+        learning: LearningServices | None = None,
     ) -> None:
         super().__init__(parent)
 
         self._memory = memory
+        # Walkthrough learning: None when [learning] enabled = false.
+        self._learning = learning
+        self._recording: WalkthroughRecorder | None = None
         self._coaching: CoachingRuntime | None = None
         self._config = config
         self._mic = mic
@@ -425,9 +442,14 @@ class CompanionManager(QObject):
         else:
             if self._walkthrough is not None:
                 logger.info("walkthrough: model says the task is finished")
-            self._end_walkthrough()
+            self._end_walkthrough(StepOutcome.SUCCEEDED, completed=True)
 
-    def _end_walkthrough(self) -> None:
+    def _end_walkthrough(
+        self, outcome: StepOutcome = StepOutcome.ABANDONED, *, completed: bool = False
+    ) -> None:
+        """Stop waiting for clicks. ``outcome`` settles the step being recorded;
+        the default covers Esc, a new push-to-talk question and errors."""
+        self._finish_recording(outcome, completed=completed)
         was_active = self._walkthrough is not None
         self._walkthrough = None
         self._click_watcher.stop()
@@ -475,7 +497,84 @@ class CompanionManager(QObject):
     def _on_walkthrough_timeout(self) -> None:
         if self._walkthrough is not None and self._state == VoiceState.GUIDING:
             logger.info("walkthrough timed out waiting for a click")
-            self._end_walkthrough()
+            self._end_walkthrough(StepOutcome.TIMED_OUT)
+
+    # ------------------------------------------------------------------
+    # Walkthrough learning
+    # ------------------------------------------------------------------
+
+    def _step_assistance(self, point_tag: PointTag | None) -> AssistanceLevel:
+        """How much help this step's answer gave.
+
+        Hook for the hands-free mode: when Curio performs the step itself it
+        should report ``AssistanceLevel.DID_IT`` here.
+        """
+        return AssistanceLevel.POINTED if point_tag is not None else AssistanceLevel.HINTED
+
+    def _record_step_answer(
+        self,
+        step: StepTag,
+        spoken_text: str,
+        point_tag: PointTag | None,
+        concepts: tuple[str, ...],
+        *,
+        window_title: str,
+        task: str,
+    ) -> None:
+        if self._learning is None:
+            return
+        if self._recording is None:
+            # The opening answer: the walkthrough is keyed on its question.
+            self._recording = WalkthroughRecorder(app=app_key(window_title), task=task)
+        element = None
+        if point_tag is not None:
+            element = element_from_point(
+                point_tag, self._current_screenshots, self._config.point_coords, window_title
+            )
+        settled = self._recording.step_answered(
+            PendingStep(
+                step_index=step.index,
+                instruction=spoken_text,
+                assistance=self._step_assistance(point_tag),
+                element=element,
+                concepts=concepts,
+            )
+        )
+        if settled is not None:
+            self._learning.record_step(settled)
+
+    def _finish_recording(self, outcome: StepOutcome, *, completed: bool) -> None:
+        recording, self._recording = self._recording, None
+        if recording is None or self._learning is None:
+            return
+        settled, summary = recording.finish(outcome, completed=completed)
+        if settled is not None:
+            self._learning.record_step(settled)
+        self._learning.finish_walkthrough(summary)
+
+    async def _learning_prompt(
+        self, text: str, window_title: str, continuing_step: int | None
+    ) -> str | None:
+        """Verified path and skill advice for how-to requests; None otherwise."""
+        if self._learning is None:
+            return None
+        recording = self._recording
+        if continuing_step is not None and recording is not None:
+            app, task = recording.app, recording.task
+            pending = recording.pending
+            concepts = pending.concepts if pending is not None else ()
+        elif continuing_step is None and is_howto_question(text):
+            app, task, concepts = app_key(window_title), task_key(text), ()
+        else:
+            return None
+        shot = self._current_screenshots[0] if self._current_screenshots else None
+        return await self._learning.prompt_text(
+            app=app,
+            task=task,
+            concepts=concepts,
+            point_coords=self._config.point_coords,
+            image_size=(shot.image_width_px, shot.image_height_px) if shot else (0, 0),
+        )
 
     # ------------------------------------------------------------------
     # TTS playback (async, fire-and-forget)
@@ -544,6 +643,7 @@ class CompanionManager(QObject):
             self.final_transcript.emit(text)
 
             local_reply = None
+            window_title = ""
             if self._memory is not None and continuing_step is None:
                 local_reply = await self._memory.handle_intent(text)
             if generation != self._generation or self._cancel_flag:
@@ -590,13 +690,18 @@ class CompanionManager(QObject):
                     selection = await self._memory.select(text)
                     if selection.prompt_text:
                         image_blocks.insert(0, {"type": "text", "text": selection.prompt_text})
+
+                # Detect active app; learned paths and the KB are both keyed on it.
+                window_title = get_foreground_window_title()
+                # Like the reminder, learned context goes into this request only.
+                learned = await self._learning_prompt(text, window_title, continuing_step)
+                if learned:
+                    image_blocks.insert(0, {"type": "text", "text": learned})
                 messages = self._history.messages_for_request(
                     current_user_text=request_text,
                     current_images=image_blocks,
                 )
 
-                # Detect active app and load KB
-                window_title = get_foreground_window_title()
                 kb_content = None
                 app_name = None
                 if self._knowledge_dir is not None:
@@ -631,12 +736,14 @@ class CompanionManager(QObject):
 
                 # Strip STEP and POINT tags from the spoken text, fly the
                 # companion to the target, and track walkthrough progress.
+                concepts: tuple[str, ...] = ()
                 if local_reply is not None:
                     # Recall payloads are data: never parse their POINT/STEP tags.
                     spoken_text, point_tag, step = full_text, None, None
                 else:
                     without_step, step = parse_step_tag(full_text)
-                    spoken_text, point_tag = parse_point_tag(without_step)
+                    without_concepts, concepts = parse_concepts_tag(without_step)
+                    spoken_text, point_tag = parse_point_tag(without_concepts)
                 # Store the answer without tags, like the macOS app, so old
                 # coordinates don't confuse later turns.
                 self._history.append(text, spoken_text)
@@ -646,6 +753,11 @@ class CompanionManager(QObject):
                     step.index if step is not None else 0,
                     step.total if step is not None else 0,
                 )
+                if step is not None:
+                    self._record_step_answer(
+                        step, spoken_text, point_tag, concepts,
+                        window_title=window_title, task=task_key(text),
+                    )
                 self._update_walkthrough(step)
                 if point_tag is not None:
                     coords = map_point_to_screen(
@@ -675,6 +787,7 @@ class CompanionManager(QObject):
         except Exception as exc:  # noqa: BLE001
             logger.error("turn pipeline error: %s", exc)
             if generation == self._generation:
+                self._end_walkthrough()
                 self.error.emit(str(exc))
                 self._set_state(VoiceState.IDLE)
 

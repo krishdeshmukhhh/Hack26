@@ -71,3 +71,15 @@ storage_mode = "local"           # local or session
 automatic_learning = "off"       # off or propose; approval always required
 # storage_path = "C:/Users/you/AppData/Local/Curio/memory.sqlite3"
 # default_expiration_days = 90
+
+# Walkthroughs teach Curio: each guided task is logged on this PC, finished
+# ones become verified paths, and a per-concept skill model decides how much
+# help to give next time. Nothing leaves the device unless sharing is on.
+[learning]
+enabled = true
+# Tray menu > "Share walkthroughs anonymously" changes this and saves it.
+# Shared: app name, your question (normalised), step instructions and element
+# positions. Never shared: window titles, file names, screenshots or audio.
+share_walkthroughs = false
+# Map server that shared paths are pushed to and pulled from. Empty = no sync.
+sync_url = ""

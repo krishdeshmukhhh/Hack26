@@ -32,6 +32,8 @@ class TrayIcon(QSystemTrayIcon):
     # like the macOS menu bar toggle. Persisted across launches.
     show_cursor_toggled = Signal(bool)
     pet_selected = Signal(str)
+    show_skills_requested = Signal()
+    share_walkthroughs_toggled = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -59,6 +61,16 @@ class TrayIcon(QSystemTrayIcon):
         memory_action = QAction("Memories", menu)
         memory_action.triggered.connect(self.show_memory_requested.emit)
         menu.addAction(memory_action)
+
+        skills_action = QAction("Skills…", menu)
+        skills_action.triggered.connect(self.show_skills_requested.emit)
+        menu.addAction(skills_action)
+
+        # Persisted in config.toml by the app; set_share_walkthroughs syncs it.
+        self._share_action = QAction("Share walkthroughs anonymously", menu)
+        self._share_action.setCheckable(True)
+        self._share_action.toggled.connect(self.share_walkthroughs_toggled.emit)
+        menu.addAction(self._share_action)
 
         for label, requested in (
             ("Tutorial URL coach", self.show_tutorial_requested),
@@ -105,6 +117,15 @@ class TrayIcon(QSystemTrayIcon):
         """Synchronize the menu after loading or persisting a selection."""
         if species in self._pet_actions:
             self._pet_actions[species].setChecked(True)
+
+    def set_share_walkthroughs(self, enabled: bool) -> None:
+        """Synchronize the checkbox without emitting ``share_walkthroughs_toggled``."""
+        blocked = self._share_action.blockSignals(True)
+        self._share_action.setChecked(enabled)
+        self._share_action.blockSignals(blocked)
+
+    def set_learning_available(self, available: bool) -> None:
+        self._share_action.setEnabled(available)
 
     def _on_quit(self) -> None:
         app = QApplication.instance()
