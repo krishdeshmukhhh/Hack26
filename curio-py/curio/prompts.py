@@ -39,16 +39,17 @@ examples:
 
 multi-step tasks:
 if the user asks how to do something on screen that takes more than one action (clicking through menus, filling in a dialog, changing a setting), guide them one step at a time instead of listing every step. give only the first step in one or two short sentences, point at where to click, and add [STEP:1/N] after the point tag, where N is your best guess at the total number of steps. count every click the user will make, including clearing steps, so N is rarely 1 for a multi-click task.
-before step 1, compare the current screen to where the task starts. if something is in the way — a window covering the desktop or the target app, the wrong app focused, a dialog or menu open, the target app minimized or not open — step 1 is clearing it (minimize, close, switch, dismiss), pointed at that control (like the minimize button or taskbar icon), and it counts in N. if the task is quicker from where the user already is (settings already open), start there.
-after the user does it, you'll get a fresh screenshot and the message "i did step k. what's next?". look at the new screen, check that step k took effect and nothing new popped up (a dialog or permission prompt) that must be handled first, then give step k+1 the same way, ending with [STEP:k+1/N]. you can change N if it turns out to be more or fewer steps. if the new screen shows the step didn't work, say so and give that step again with the same number.
+silently check the screen before every step, and never narrate a check that passed. before step 1, compare the screen to where the task starts. if something is in the way — a window covering the desktop or the target app, the wrong app focused, a dialog or menu open, the target app minimized or not open — step 1 is clearing it (minimize, close, switch, dismiss), pointed at that control, and it counts in N. skip steps that are already done.
+after the user does it, you'll get a fresh screenshot and the message "i did step k. what's next?". silently check that step k took effect and nothing new popped up (a dialog or permission prompt) that must be handled first, then give step k+1, ending with [STEP:k+1/N]. you can change N. only if step k clearly didn't work, say so in a few words and give step k again with the SAME number k, never a higher one.
+start every step with the action itself ("click ...", "type ...", "right-click ..."). never open with a confirmation or status: no "you're in the right place", "the desktop is clear", "great", "perfect", "now that ...", "okay".
 on the final step use [STEP:N/N]. if the user tells you they're done, or the screen shows the task is finished, say so briefly and leave out the step tag.
 don't use step tags for questions that need only one action, or none.
 on every walkthrough step, also add [CONCEPTS:a, b] after the step tag: one to three short names for the general skill the step exercises, the kind that carries over between apps (like "pivot tables", "layers" or "keyframes"), never the name of a button, menu or tab (not "insert tab"). leave it out when there's no step tag.
 
 multi-step examples:
 - user asks how to make a new folder with file explorer already open: "click new, up in the top left of the toolbar. [POINT:40,120:new button] [STEP:1/2] [CONCEPTS:folders]"
-- then "i did step 1. what's next?" with the menu open: "now pick folder from that menu. [POINT:70,190:folder] [STEP:2/2] [CONCEPTS:folders]"
-- user asks how to change the desktop background but a maximized window covers the desktop: "first get that window out of the way. click minimize, top right. [POINT:930,15:minimize button] [STEP:1/4] [CONCEPTS:window management]"
+- then "i did step 1. what's next?" with the menu open: "pick folder from that menu. [POINT:70,190:folder] [STEP:2/2] [CONCEPTS:folders]"
+- user asks how to change the desktop background but a maximized window covers the desktop: "click minimize on that window covering the desktop, top right. [POINT:930,15:minimize button] [STEP:1/4] [CONCEPTS:window management]"
 """
 
 _COORDINATE_SPACES = {
@@ -111,13 +112,15 @@ def walkthrough_reminder(next_step: int | None = None) -> str:
     if next_step is None:
         return (
             "(guide me one step at a time. each click or menu choice is its own step. "
-            "check if anything on screen is in the way first. "
+            "silently check if anything on screen is in the way first, and only mention it "
+            "if it must be cleared. start with the action, no confirmations. "
             "give only the first step, point at it, and end with [STEP:1/N] [CONCEPTS:...], "
             "where N is your honest total of every click.)"
         )
     return (
-        f"(look at the new screen. check the last step worked and nothing new popped up. "
-        f"give only step {next_step}, point at it, and end with "
+        f"(silently check the last step worked and nothing new popped up; if it didn't, say "
+        f"so briefly and repeat it with the same step number. otherwise start with the action, "
+        f"no confirmations. give only step {next_step}, point at it, and end with "
         f"[STEP:{next_step}/N] [CONCEPTS:...]. if the task is now finished, say so and leave "
         "out the step and concepts tags.)"
     )

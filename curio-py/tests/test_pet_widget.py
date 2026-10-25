@@ -164,3 +164,20 @@ def test_widget_settles_and_sleeps_without_cursor_input(app, monkeypatch):
     assert widget.controller.action == "sleep"
     assert widget.player.action == "sleep"
     assert not widget.grab().isNull()
+
+
+def test_pet_arrival_fires_for_target_below_work_area(app):
+    """A target on the taskbar can't be reached exactly: the clamped spot counts as landed."""
+    from curio.pet_config import PetSettings
+    from curio.ui.pet_widget import PetCompanionWidget
+
+    widget = PetCompanionWidget(settings=PetSettings())
+    arrived = []
+    widget.pointer_arrived.connect(lambda: arrived.append(True))
+    widget.fly_to(400, 780)  # near the bottom edge of the 800x800 offscreen screen
+    assert widget._point_target
+    tx, ty = widget._point_target
+    widget._bounds = (0, 0, 656, 700)  # work area ends above a taskbar
+    widget.controller.position = (tx, 700)  # parked at the clamped spot, 48 px from target
+    widget._check_arrival()
+    assert arrived == [True]

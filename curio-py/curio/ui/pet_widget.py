@@ -53,6 +53,7 @@ class PetCompanionWidget(CompanionWidget):
         self._point_target: tuple[float, float] | None = None
         self._arrival_sent = True
         self._pill_visit = False  # pointer pill is up for the current visit
+        self._bounds: tuple[float, float, float, float] | None = None  # sprite clamp rect
         super().__init__(parent)
         self.setFixedSize(self.WIDGET_W, self.WIDGET_H)
         self._load_pet()
@@ -178,6 +179,11 @@ class PetCompanionWidget(CompanionWidget):
             return
         px, py = self.controller.position
         tx, ty = self._point_target
+        if self._bounds is not None:
+            # The sprite is clamped to the work area, so a target on the taskbar can't
+            # be reached exactly; the clamped spot is where it will actually land.
+            left, top, right, bottom = self._bounds
+            tx, ty = max(left, min(right, tx)), max(top, min(bottom, ty))
         if math.hypot(px - tx, py - ty) <= self.ARRIVAL_DISTANCE:
             self._arrival_sent = True
             self.pointer_arrived.emit()
@@ -228,6 +234,7 @@ class PetCompanionWidget(CompanionWidget):
             max(geo.left(), geo.right() + 1 - self.WIDGET_W),
             max(geo.top(), geo.bottom() + 1 - self.WIDGET_H),
         )
+        self._bounds = bounds
         if force and not self._position_initialized:
             self.controller.position = destination
             self._position_initialized = True
