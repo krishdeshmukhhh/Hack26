@@ -83,6 +83,10 @@ class FakePresenter:
         self.shown = []
         self.signals = []
         self.cleared = 0
+        self.current = None  # FocusPresenter's open card; tests set it when they need one
+
+    def handle_spoken(self, text: str) -> bool:
+        return False
 
     def bind(self, responder) -> None:
         self.responder = responder

@@ -17,7 +17,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from PySide6.QtCore import QByteArray, QObject, QTimer, Signal
@@ -38,7 +38,7 @@ from curio.hands_free import strip_finish_command
 from curio.hotkey import HotkeyMonitor
 from curio.key_finish_watcher import KeyFinishWatcher
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
-from curio.learning_contract import AssistanceLevel, StepOutcome, app_key, task_key
+from curio.learning_contract import AssistanceLevel, StepEvent, StepOutcome, app_key, task_key
 from curio.learning_events import (
     LearningServices,
     PendingStep,
@@ -60,6 +60,9 @@ from curio.screen_capture import ScreenshotImage
 from curio.speech_chunker import SpeechChunker
 from curio.state import VoiceState
 from curio.window_context import describe_windows
+
+if TYPE_CHECKING:
+    from curio.focus_session.integration import FocusIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +158,8 @@ class CompanionManager(QObject):
         self._learning = learning
         self._recording: WalkthroughRecorder | None = None
         self._coaching: CoachingRuntime | None = None
+        # Focus/study session hooks (curio.focus_session.integration); None = off.
+        self._focus: FocusIntegration | None = None
         self._config = config
         self._mic = mic
         self._hotkey = hotkey
@@ -242,6 +247,23 @@ class CompanionManager(QObject):
         runtime.interrupted.connect(self._stop_speaking)
         runtime.response_ready.connect(self._on_coaching_reply)
         runtime.error.connect(self.error)
+
+    def attach_focus(self, focus: FocusIntegration | None) -> None:
+        """Focus sessions: card replies, start/end by voice and tutor directives."""
+        self._focus = focus
+
+    def say(self, text: str) -> bool:
+        """Speak a short focus-session line, only when nothing else is happening.
+
+        Never interrupts listening, thinking or an answer being spoken; the
+        caller still shows its text. Goes through the normal state machine so
+        hands-free standby stays suspended while it plays.
+        """
+        if not text or self._state not in (VoiceState.IDLE, VoiceState.GUIDING):
+            return False
+        self._set_state(VoiceState.RESPONDING)
+        self._speak_task = asyncio.ensure_future(self._speak(text, self._generation))
+        return True
 
     def _on_coaching_mode_changed(self, _mode: str) -> None:
         self._on_hotkey_cancelled()
@@ -441,7 +463,13 @@ class CompanionManager(QObject):
         # press between task assignment and coroutine start cannot
         # have its cancellation silently undone.
         self._cancel_flag = False
-        if self._coaching is not None and self._coaching.mode != CoachingMode.ASSISTANT:
+        coaching = self._coaching is not None and self._coaching.mode != CoachingMode.ASSISTANT
+        if not coaching and self._focus is not None and self._focus.handle_transcript(text):
+            # A reply to a focus card, or starting/ending a session: no assistant turn.
+            self.final_transcript.emit(text)
+            self._set_state(VoiceState.IDLE)
+            return
+        if coaching:
             self._current_task = asyncio.ensure_future(
                 self._run_coaching_turn(text, self._generation)
             )
@@ -650,7 +678,13 @@ class CompanionManager(QObject):
             )
         )
         if settled is not None:
-            self._learning.record_step(settled)
+            self._record_settled(settled)
+
+    def _record_settled(self, settled: StepEvent) -> None:
+        self._learning.record_step(settled)
+        if self._focus is not None:
+            # Walkthrough outcomes are the study coach's attempt/stuck events.
+            self._focus.step_settled(settled)
 
     def _finish_recording(self, outcome: StepOutcome, *, completed: bool) -> None:
         recording, self._recording = self._recording, None
@@ -662,8 +696,10 @@ class CompanionManager(QObject):
             evidence_basis="model_inferred" if completed else "unknown",
         )
         if settled is not None:
-            self._learning.record_step(settled)
+            self._record_settled(settled)
         self._learning.finish_walkthrough(summary)
+        if self._focus is not None:
+            self._focus.walkthrough_finished(recording.task, completed)
 
     async def _learning_prompt(
         self, text: str, window_title: str, continuing_step: int | None
@@ -829,18 +865,30 @@ class CompanionManager(QObject):
 
                 # Build messages from conversation history. Walkthrough reminders
                 # go only into this request, not into the stored history.
+                # Detect active app; learned paths and the KB are both keyed on it.
+                window_title = get_foreground_window_title()
+                # In a study session, the coach decides how much help this turn
+                # gives. Never on walkthrough continuations: those keep the STEP flow.
+                directive = None
+                if continuing_step is None and self._focus is not None:
+                    directive = await self._focus.directive_for(
+                        text, app=app_key(window_title), task=task_key(text)
+                    )
+                    if generation != self._generation or self._cancel_flag:
+                        return
                 request_text = text
                 if continuing_step is not None:
                     request_text = f"{text}\n{walkthrough_reminder(continuing_step + 1)}"
-                elif is_howto_question(text):
+                elif is_howto_question(text) and (
+                    directive is None or directive.allow_walkthrough
+                ):
                     request_text = f"{text}\n{walkthrough_reminder()}"
+                if directive is not None:
+                    request_text = f"{request_text}\n{directive.line}"
                 if self._memory is not None:
                     selection = await self._memory.select(text)
                     if selection.prompt_text:
                         image_blocks.insert(0, {"type": "text", "text": selection.prompt_text})
-
-                # Detect active app; learned paths and the KB are both keyed on it.
-                window_title = get_foreground_window_title()
                 # Like the reminder, learned context goes into this request only.
                 learned = await self._learning_prompt(text, window_title, continuing_step)
                 if learned:
@@ -928,6 +976,8 @@ class CompanionManager(QObject):
                         window_title=window_title, task=task_key(text),
                     )
                 self._update_walkthrough(step)
+                if step is not None and self._focus is not None:
+                    self._focus.walkthrough_step(step.index, spoken_text, concepts)
                 # POINT:none (or an unmappable point) means no spotlight.
                 self._hide_spotlight()
                 if point_tag is not None:
