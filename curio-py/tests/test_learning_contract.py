@@ -70,7 +70,9 @@ def test_path_round_trip_marks_shared():
     path = TaskPath(
         app="excel",
         task="insert a pivot table",
-        steps=(PathStep(index=1, instruction="click insert", concepts=("ribbon",), difficulty=0.4),),
+        steps=(
+            PathStep(index=1, instruction="click insert", concepts=("ribbon",), difficulty=0.4),
+        ),
         verified_count=3,
     )
     back = path_from_wire(path_to_wire(path))
