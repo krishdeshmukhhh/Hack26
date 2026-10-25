@@ -107,6 +107,14 @@ Stop it when you're done: `tmux kill-session -t curio`.
 No free GPU? `tmux new -d -s curio "$PWD/wait_and_serve.sh"` starts it the
 moment one frees up. Mind the clock: it'll hold the card until you stop it.
 
+## Latency tuning
+
+`curio.env` has `ENABLE_PREFIX_CACHING` (default 1, explicit
+`--enable-prefix-caching`; already on by default in vLLM 0.11), plus optional,
+empty-by-default `MAX_NUM_SEQS` and `MM_PROCESSOR_KWARGS`. Chunked prefill is
+already on in the V1 engine. Changes need a server restart. Check the log for
+"Prefix cache hit rate" rising after the second request.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |

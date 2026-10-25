@@ -65,7 +65,9 @@ def _configured_llm(config: Config):
     """Separate clients keep coaching deltas out of the ordinary voice stream."""
     if config.local is not None:
         return OpenAICompatLLMClient(
-            base_url=config.local.llm_base_url, api_key=config.local.llm_api_key
+            base_url=config.local.llm_base_url,
+            api_key=config.local.llm_api_key,
+            temperature=config.local.llm_temperature,
         )
     return LLMClient(worker_url=config.worker_url)
 

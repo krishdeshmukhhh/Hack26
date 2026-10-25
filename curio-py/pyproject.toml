@@ -36,6 +36,8 @@ dev = [
 curio = "curio.__main__:main"
 curio-map-server = "curio.map_sync.server:main"
 curio-map-seed = "curio.map_sync.seed:main"
+curio-eval-capture = "curio.eval.capture:main"
+curio-eval = "curio.eval.run:main"
 
 [tool.ruff]
 line-length = 100
