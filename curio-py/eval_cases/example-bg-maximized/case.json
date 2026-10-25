@@ -1,0 +1,36 @@
+{
+  "name": "example-bg-maximized",
+  "question": "how do I change my desktop background?",
+  "window_title": "Synthetic Browser",
+  "windows_text": "- \"Synthetic Browser\" (chrome.exe) [focused] \u2014 maximized, covers screen 1",
+  "screens": [
+    {
+      "file": "screen1.jpg",
+      "label": "user's screen (cursor is here) (image dimensions: 1280x720 pixels)",
+      "is_cursor_screen": true,
+      "display_width_px": 1920,
+      "display_height_px": 1080,
+      "image_width_px": 1280,
+      "image_height_px": 720,
+      "scale": 0.6666666666666666,
+      "monitor_left": 0,
+      "monitor_top": 0
+    }
+  ],
+  "expected": {
+    "first_step_keywords": [
+      "minimize"
+    ],
+    "forbidden_keywords": [
+      "right-click the desktop"
+    ],
+    "point_box": {
+      "screen": 1,
+      "x0": 1130,
+      "y0": 0,
+      "x1": 1210,
+      "y1": 40
+    },
+    "min_steps": 3
+  }
+}

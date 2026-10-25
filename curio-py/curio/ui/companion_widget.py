@@ -73,7 +73,7 @@ class CompanionWidget(QWidget):
     """The blue buddy that follows the cursor and points at things."""
 
     CANVAS = 72                # square window; the buddy is drawn at its centre
-    TRIANGLE_SIZE = 18
+    TRIANGLE_SIZE = 22         # was 18; bigger reads better in 1080p recordings
     FRAME_MS = 16              # ~60 fps for tracking and flights
     POINT_HOLD_MS = 3000       # pill stays this long once typed out
     BUBBLE_FADE_MS = 500
@@ -474,7 +474,10 @@ class CompanionWidget(QWidget):
         painter.save()
         painter.translate(c)
         painter.rotate(self._rotation)
-        painter.setPen(Qt.PenStyle.NoPen)
+        # White rim so the blue triangle stays visible on blue/dark backgrounds.
+        rim = QPen(QColor(255, 255, 255, 230), 1.6)
+        rim.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(rim)
         painter.setBrush(color)
         painter.drawPolygon(QPolygonF([
             QPointF(0, -height / 1.5),
