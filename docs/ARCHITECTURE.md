@@ -131,6 +131,40 @@ tests this took first-step tagging from 1 in 3 runs to 4 in 4.
 
 ## Voice
 
+### Optional hands-free activation
+
+`hands_free.py` adds a local-backend-only input path. `WindowsWakeListener` owns
+an in-process Windows SAPI recognizer and phrase grammar on a COM-initialized
+QThread. The grammar accepts "hey curio", a pronunciation alias, and "okay curio".
+Native window messages are explicitly dispatched; `comtypes.PumpEvents` alone
+does not deliver SAPI's window notifications on this host. SAPI grammar optional
+arguments and the outgoing event interface are explicit for COM compatibility.
+The recognizer explicitly binds an audio input token matched to PortAudio's
+input name, with a single-device fallback. `AudioInput=None` left this in-process
+recognizer without a live stream despite successful emulation/file-input tests.
+A native live-stream progress regression now covers the microphone path.
+
+`HandsFreeController` owns the persisted tray toggle's runtime state, cooldown,
+timeouts and constant-space speech endpoint detector. `SpeechActivityWorker`
+reuses faster-whisper's bundled Silero VAD on a coalesced one-second window,
+with inference off the UI thread and no work outside capture. Capture enables
+only native send/cancel commands; the wake grammar is disabled. Explicit send
+ends a question even when a TV/other speaker prevents automatic endpointing.
+A wake notification follows
+native recognition suspension, then calls the manager's `begin_hands_free` API.
+`finish_hands_free` reuses the normal release/transcribe/capture path;
+`cancel_hands_free` discards local audio without inference. Push-to-talk takes
+over, and Esc cancels hands-free capture. The manager accepts PCM only while
+LISTENING; no standby microphone data enters its deque.
+
+SAPI sleeps without polling during processing/playback, and the Qt
+endpoint timer stops during processing/playback. Cooldown prevents immediate
+speaker-echo activation. Disabled mode creates no worker; disabling after use
+closes and retires it asynchronously. Shutdown joins remaining workers before
+Qt objects are destroyed. Full-sentence wake+question capture and voice barge-in
+are intentionally outside this first version. See RUNNING.md for usage and
+physical-desktop verification limits.
+
 `KokoroTTSClient` splits the answer into sentences and synthesises the next
 one while the current one plays, so speech starts about 0.4 s after the
 answer arrives. onnxruntime is limited to 8 threads with busy-wait spinning

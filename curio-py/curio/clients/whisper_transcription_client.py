@@ -105,6 +105,12 @@ class WhisperTranscriptionClient(QObject):
 
         self._emit_final(session, text)
 
+    def cancel_stream(self) -> None:
+        """Discard a cancelled recording without running expensive inference."""
+        self._session += 1
+        self._pcm = bytearray()
+        self._collected = None
+
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
