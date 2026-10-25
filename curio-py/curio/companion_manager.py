@@ -92,6 +92,18 @@ class CaptureVisibilityController(Protocol):
         ...
 
 
+class SpotlightHost(Protocol):
+    """Protocol for the point-target spotlight (see ``curio.ui.spotlight``)."""
+
+    def point_started(self, x: int, y: int, *, hold: bool = False) -> None: ...
+
+    def hide(self) -> None: ...
+
+    def hide_for_capture(self) -> None: ...
+
+    def restore_after_capture(self) -> None: ...
+
+
 class CompanionManager(QObject):
     """Orchestration state machine for the voice companion pipeline.
 
@@ -132,9 +144,12 @@ class CompanionManager(QObject):
         *,
         memory: ConversationMemory | None = None,
         learning: LearningServices | None = None,
+        spotlight: SpotlightHost | None = None,
     ) -> None:
         super().__init__(parent)
 
+        # Dims the screen around the point target; None when [ui] spotlight = false.
+        self._spotlight = spotlight
         self._memory = memory
         # Walkthrough learning: None when [learning] enabled = false.
         self._learning = learning
@@ -330,6 +345,7 @@ class CompanionManager(QObject):
         self.speaking_changed.emit(False)
 
         # A new question ends any walkthrough in progress.
+        self._hide_spotlight()
         self._end_walkthrough()
         self._stop_speaking()
 
@@ -366,6 +382,7 @@ class CompanionManager(QObject):
         self._generation += 1
         if self._coaching is not None:
             self._coaching.interrupt()
+        self._hide_spotlight()
         self._end_walkthrough()
         self._cancel_flag = True
         self._speech = None
@@ -497,6 +514,10 @@ class CompanionManager(QObject):
         logger.info("turn timings: %s total=%.2fs", " ".join(parts), time.monotonic() - start)
         self._marks = {}
 
+    def _hide_spotlight(self) -> None:
+        if self._spotlight is not None:
+            self._spotlight.hide()
+
     def _stop_speaking(self) -> None:
         self._speech = None
         self._tts.stop()
@@ -530,6 +551,7 @@ class CompanionManager(QObject):
     ) -> None:
         """Stop waiting for clicks. ``outcome`` settles the step being recorded;
         the default covers Esc, a new push-to-talk question and errors."""
+        self._hide_spotlight()
         self._finish_recording(outcome, completed=completed)
         was_active = self._walkthrough is not None
         self._walkthrough = None
@@ -548,6 +570,7 @@ class CompanionManager(QObject):
         if step is None or self._state not in (VoiceState.RESPONDING, VoiceState.GUIDING):
             return
         logger.info("walkthrough: step %d done, fetching the next one", step.index)
+        self._hide_spotlight()
         # One click per step; the next answer re-arms the watcher.
         self._click_watcher.stop()
         if self._key_watcher is not None:
@@ -570,6 +593,7 @@ class CompanionManager(QObject):
         if self._coaching is not None and self._coaching.mode != CoachingMode.ASSISTANT:
             self._coaching.stop_session()
             return
+        self._hide_spotlight()
         if self._walkthrough is None and self._state != VoiceState.GUIDING:
             return
         self._stop_speaking()
@@ -768,6 +792,10 @@ class CompanionManager(QObject):
                 # The async sleep lets qasync process the Qt opacity change
                 # AND lets pending asyncio tasks (stop_stream cleanup) settle
                 # — avoids re-entrancy that processEvents() would cause.
+                # The spotlight goes first and instantly: it must never be in a screenshot.
+                if self._spotlight is not None:
+                    self._spotlight.hide()
+                    self._spotlight.hide_for_capture()
                 self._panel_visibility_controller.hide_for_capture()
                 await asyncio.sleep(0.05)
                 try:
@@ -775,6 +803,8 @@ class CompanionManager(QObject):
                     self._current_screenshots = screenshots
                 finally:
                     self._panel_visibility_controller.restore_after_capture()
+                    if self._spotlight is not None:
+                        self._spotlight.restore_after_capture()
                 self._mark("captured")
 
                 # Build image content blocks. The window list (~1 ms of Win32 calls,
@@ -898,11 +928,17 @@ class CompanionManager(QObject):
                         window_title=window_title, task=task_key(text),
                     )
                 self._update_walkthrough(step)
+                # POINT:none (or an unmappable point) means no spotlight.
+                self._hide_spotlight()
                 if point_tag is not None:
                     coords = map_point_to_screen(
                         point_tag, self._current_screenshots, self._config.point_coords
                     )
                     if coords is not None:
+                        if self._spotlight is not None:
+                            self._spotlight.point_started(
+                                coords[0], coords[1], hold=step is not None
+                            )
                         self._panel_visibility_controller.fly_to(
                             coords[0],
                             coords[1],

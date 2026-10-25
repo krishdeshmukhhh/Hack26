@@ -144,6 +144,33 @@ class LearningSettings:
         return cls(**values)
 
 
+@dataclass(frozen=True)
+class UiSettings:
+    """``[ui]``: on-screen visuals."""
+
+    # Dim the target's monitor and ring the spot the companion points at.
+    spotlight: bool = True
+    # How dark the rest of the screen gets (black opacity), 0 to 0.8.
+    spotlight_dim: float = 0.35
+
+    @classmethod
+    def from_dict(cls, data: object) -> UiSettings:
+        if not isinstance(data, dict):
+            raise ConfigError("[ui] must be a table")
+        defaults = cls()
+        spotlight = data.get("spotlight", defaults.spotlight)
+        if not isinstance(spotlight, bool):
+            raise ConfigError("ui.spotlight must be a boolean")
+        dim = data.get("spotlight_dim", defaults.spotlight_dim)
+        if (
+            isinstance(dim, bool)
+            or not isinstance(dim, (int, float))
+            or not 0.0 <= dim <= 0.8
+        ):
+            raise ConfigError(f"ui.spotlight_dim must be a number between 0 and 0.8, got {dim!r}")
+        return cls(spotlight=spotlight, spotlight_dim=float(dim))
+
+
 def save_share_walkthroughs(path: Path, enabled: bool) -> None:
     """Change only ``[learning] share_walkthroughs``, keeping comments and other settings.
 
@@ -198,6 +225,7 @@ class Config:
     pet: PetSettings = field(default_factory=PetSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
     learning: LearningSettings = field(default_factory=LearningSettings)
+    ui: UiSettings = field(default_factory=UiSettings)
 
     @property
     def point_coords(self) -> str:
@@ -272,6 +300,7 @@ class Config:
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
         learning = LearningSettings.from_dict(data.get("learning", {}))
+        ui = UiSettings.from_dict(data.get("ui", {}))
 
         return cls(
             worker_url=worker_url if isinstance(worker_url, str) else "",
@@ -284,6 +313,7 @@ class Config:
             pet=pet,
             memory=memory,
             learning=learning,
+            ui=ui,
         )
 
     @staticmethod

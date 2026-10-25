@@ -106,6 +106,7 @@ def test_rearm_resets_count(qt_app) -> None:
 
 def _tap_monitor(monkeypatch, qt_app):
     monkeypatch.setattr(hotkey_module, "_get_async_key_state", None)
+    monkeypatch.setattr(hotkey_module, "_foreground_is_own_process", lambda: False)
     mon = HotkeyMonitor("ctrl+alt")
     mon.typing_tap_enabled = True
     posted: list[str] = []
@@ -149,6 +150,43 @@ def test_monitor_disabled_tap_posts_nothing(monkeypatch, qt_app) -> None:
     mon._on_press(_char("a"))
     mon._on_press(keyboard.Key.enter)
     assert posted == []
+
+
+def test_monitor_ignores_typing_in_own_window(monkeypatch, qt_app) -> None:
+    mon, posted = _tap_monitor(monkeypatch, qt_app)
+    monkeypatch.setattr(hotkey_module, "_foreground_is_own_process", lambda: True)
+    mon._on_press(_char("a"))
+    mon._on_press(keyboard.Key.enter)
+    assert posted == []
+
+
+def test_monitor_counts_typing_in_other_window(monkeypatch, qt_app) -> None:
+    mon, posted = _tap_monitor(monkeypatch, qt_app)
+    monkeypatch.setattr(hotkey_module, "_foreground_is_own_process", lambda: False)
+    mon._on_press(_char("a"))
+    assert posted == ["_emit_typing_printable"]
+
+
+def test_foreground_check_failure_is_fail_open(monkeypatch, qt_app) -> None:
+    monkeypatch.setattr(hotkey_module, "_get_async_key_state", None)
+
+    def boom(*_a):
+        raise OSError("user32 exploded")
+
+    monkeypatch.setattr(hotkey_module, "_fg_api", (boom, boom))
+    assert hotkey_module._foreground_is_own_process() is False
+    mon = HotkeyMonitor("ctrl+alt")
+    mon.typing_tap_enabled = True
+    posted: list[str] = []
+    monkeypatch.setattr(mon, "_post_main", posted.append)
+    mon._on_press(_char("a"))  # must not raise
+    assert posted == ["_emit_typing_printable"]
+
+
+def test_loggable_redacts_printable_keys() -> None:
+    assert hotkey_module._loggable("vk65") == "<key>"
+    assert hotkey_module._loggable("a") == "<key>"
+    assert hotkey_module._loggable("ctrl_l") == "ctrl_l"
 
 
 # --- manager integration ----------------------------------------------------

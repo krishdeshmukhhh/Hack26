@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
+from ctypes import wintypes
 from enum import Enum, auto
 
 from pynput import keyboard
 from PySide6.QtCore import QMetaObject, QObject, Qt, Signal, Slot
-
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,47 @@ except AttributeError:  # not Windows
 # Virtual-key codes to ask Windows about for the merged modifier names.
 _VK_SHIFT = 0x10
 _VK_MENU = 0x12  # either Alt
+
+_SAFE_KEY_NAMES = frozenset({"ctrl_l", "ctrl_r", "alt", "shift", "win", "esc"})
+
+# Private user32 handle (not the shared ctypes.windll), resolved lazily.
+_fg_api: tuple | None = None
+_fg_api_failed = False
+
+
+def _loggable(name: str) -> str:
+    """Key id safe for logs: modifiers/specials by name, printable keys redacted."""
+    return name if name in _SAFE_KEY_NAMES or name.startswith("Key.") else "<key>"
+
+
+def _foreground_is_own_process() -> bool:
+    """True if the foreground window belongs to this process. Fails open (False)."""
+    global _fg_api, _fg_api_failed
+    try:
+        if _fg_api is None:
+            if _fg_api_failed:
+                return False
+            try:
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                get_fg = user32.GetForegroundWindow
+                get_fg.argtypes = []
+                get_fg.restype = wintypes.HWND
+                get_pid = user32.GetWindowThreadProcessId
+                get_pid.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+                get_pid.restype = wintypes.DWORD
+                _fg_api = (get_fg, get_pid)
+            except (AttributeError, OSError):  # not Windows
+                _fg_api_failed = True
+                return False
+        get_fg, get_pid = _fg_api
+        hwnd = get_fg()
+        if not hwnd:
+            return False
+        pid = wintypes.DWORD(0)
+        get_pid(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except Exception:
+        return False
 
 
 class _HotkeyState(Enum):
@@ -186,7 +228,12 @@ class HotkeyMonitor(QObject):
         vk = _key_vk(name, key)
         if vk is not None:
             self._held_vks[name] = vk
-        logger.debug("key down %s (state=%s, held=%s)", name, self._state.name, sorted(self._held))
+        logger.debug(
+            "key down %s (state=%s, held=%s)",
+            _loggable(name),
+            self._state.name,
+            sorted(_loggable(n) for n in self._held),
+        )
 
         if self.typing_tap_enabled:
             self._tap_typing(key, name)
@@ -219,7 +266,12 @@ class HotkeyMonitor(QObject):
             return
         self._held.discard(name)
         self._held_vks.pop(name, None)
-        logger.debug("key up %s (state=%s, held=%s)", name, self._state.name, sorted(self._held))
+        logger.debug(
+            "key up %s (state=%s, held=%s)",
+            _loggable(name),
+            self._state.name,
+            sorted(_loggable(n) for n in self._held),
+        )
 
         if self._state == _HotkeyState.ARMED:
             # Releasing any of the required modifiers ends the press.
@@ -251,11 +303,17 @@ class HotkeyMonitor(QObject):
         if self._held & {"ctrl_l", "ctrl_r", "alt", "win"}:
             return
         if key == keyboard.Key.enter or getattr(key, "vk", None) == 0x0D:
-            self._post_main("_emit_typing_enter")
+            slot = "_emit_typing_enter"
         elif key == keyboard.Key.space or (
             isinstance(key, keyboard.KeyCode) and key.char is not None and key.char.isprintable()
         ):
-            self._post_main("_emit_typing_printable")
+            slot = "_emit_typing_printable"
+        else:
+            return
+        # Typing into our own windows (coach widget etc.) must not finish a step.
+        if _foreground_is_own_process():
+            return
+        self._post_main(slot)
 
     def _prune_released_keys(self, keep: str | None = None) -> None:
         """Drop held keys whose key-up we never saw.
@@ -274,7 +332,7 @@ class HotkeyMonitor(QObject):
             if name == keep or vk is None:
                 continue
             if not _get_async_key_state(vk) & 0x8000:
-                logger.debug("dropping stale held key %s", name)
+                logger.debug("dropping stale held key %s", _loggable(name))
                 self._held.discard(name)
                 self._held_vks.pop(name, None)
 

@@ -64,3 +64,34 @@ def make_overlay_window(widget: QWidget) -> None:
 
     margins = MARGINS(-1, -1, -1, -1)
     dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+
+
+def _is_windows_platform() -> bool:
+    """True on a real Windows Qt platform (the offscreen test platform has no HWNDs)."""
+    from PySide6.QtGui import QGuiApplication
+
+    return sys.platform == "win32" and QGuiApplication.platformName() == "windows"
+
+
+def make_non_activating(widget: QWidget) -> None:
+    """Add WS_EX_NOACTIVATE so showing or clicking near the window never moves focus."""
+    if not _is_windows_platform():
+        return
+    hwnd = int(widget.winId())
+    user32 = ctypes.windll.user32
+    GWL_EXSTYLE = -20  # noqa: N806
+    WS_EX_NOACTIVATE = 0x08000000  # noqa: N806
+    style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE)
+
+
+def raise_without_activating(widget: QWidget) -> None:
+    """Move a topmost window to the front of the topmost band without taking focus."""
+    if not _is_windows_platform() or not widget.isVisible():
+        return
+    HWND_TOPMOST = ctypes.c_void_p(-1)  # noqa: N806
+    SWP_NOSIZE_NOMOVE_NOACTIVATE = 0x0001 | 0x0002 | 0x0010  # noqa: N806
+    ctypes.windll.user32.SetWindowPos(
+        ctypes.c_void_p(int(widget.winId())), HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOSIZE_NOMOVE_NOACTIVATE,
+    )

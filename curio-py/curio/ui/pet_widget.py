@@ -10,6 +10,7 @@ If the sprite assets can't load, the base triangle is used unchanged.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import replace
 
@@ -38,6 +39,7 @@ class PetCompanionWidget(CompanionWidget):
     WIDGET_W = 144
     WIDGET_H = 72
     PET_SIZE = 64
+    ARRIVAL_DISTANCE = 24  # px from the point target that counts as landed
 
     def __init__(self, parent=None, *, settings: PetSettings | None = None):
         self.settings = settings or PetSettings()
@@ -49,6 +51,7 @@ class PetCompanionWidget(CompanionWidget):
         self._point_coords = None
         self._pill_anchor: QPointF | None = None
         self._point_target: tuple[float, float] | None = None
+        self._arrival_sent = True
         self._pill_visit = False  # pointer pill is up for the current visit
         super().__init__(parent)
         self.setFixedSize(self.WIDGET_W, self.WIDGET_H)
@@ -124,6 +127,7 @@ class PetCompanionWidget(CompanionWidget):
             return
         self._point_screen = screen
         self._point_coords = (x, y)
+        self._arrival_sent = False
         self._hold = hold
         # The marker is at the exact target; the sprite sits beside it.
         self._point_target = (x - 8, y - self.PET_SIZE // 2)
@@ -158,6 +162,7 @@ class PetCompanionWidget(CompanionWidget):
         if self.catalog is None:
             return super()._advance_motion()
         self._track_cursor()
+        self._check_arrival()
         if self._hold and self._point_target and not self.controller.point_active:
             # Walkthrough step: stay at the target until the user clicks,
             # instead of the controller's usual short visit.
@@ -166,6 +171,16 @@ class PetCompanionWidget(CompanionWidget):
             # The pet's visit is over; fade the pill where it is.
             self._pill_visit = False
             self.bubble.fade_out(self.BUBBLE_FADE_MS)
+
+    def _check_arrival(self):
+        """Tell the spotlight once the pet has reached the point target."""
+        if self._arrival_sent or not self._point_target or not self.controller.point_active:
+            return
+        px, py = self.controller.position
+        tx, ty = self._point_target
+        if math.hypot(px - tx, py - ty) <= self.ARRIVAL_DISTANCE:
+            self._arrival_sent = True
+            self.pointer_arrived.emit()
 
     def _snap_to_cursor(self):
         if self.catalog is None or not hasattr(self, "controller"):

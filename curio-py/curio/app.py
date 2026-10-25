@@ -53,6 +53,7 @@ from curio.ui.coaching_window import CoachingWindow
 from curio.ui.history_window import HistoryWindow
 from curio.ui.memory_window import MemoryWindow
 from curio.ui.pet_widget import PetCompanionWidget
+from curio.ui.spotlight import SpotlightController
 from curio.ui.tray_icon import TrayIcon
 
 APP_NAME = "Curio"
@@ -269,6 +270,11 @@ def run() -> int:
             tray_icon.open_stuck_map_requested.connect(
                 lambda: QDesktopServices.openUrl(QUrl(f"{sync_url}/"))
             )
+        # Dims around the point target; draws nothing when [ui] spotlight = false.
+        spotlight = SpotlightController(result.config.ui)
+        spotlight.raise_above = companion.raise_overlays
+        companion.pointer_arrived.connect(spotlight.arrived)
+        result.app.aboutToQuit.connect(spotlight.hide_now)
         manager = CompanionManager(
             config=result.config,
             mic=mic,
@@ -280,6 +286,7 @@ def run() -> int:
             panel_visibility_controller=companion,
             memory=memory_runtime.conversation,
             learning=learning,
+            spotlight=spotlight,
         )
         if local is not None:
             hands_free = HandsFreeController(manager, mic, hotkey_monitor)
@@ -297,6 +304,7 @@ def run() -> int:
                 mode = coaching_runtime.mode
                 visible = [w for w in (coaching_window, history, memory_window)
                            if w is not None and w.isVisible()]
+                spotlight.hide_now()
                 companion.hide_for_capture()
                 for window in visible:
                     window.hide()
