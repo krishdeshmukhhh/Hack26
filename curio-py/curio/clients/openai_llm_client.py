@@ -102,6 +102,26 @@ class OpenAICompatLLMClient(QObject):
         self._api_key = api_key
         self._temperature = temperature
 
+    async def warm_up(self, model: str) -> None:
+        """One tiny non-streaming request so the first real answer isn't the cold one.
+
+        Emits no signals (the app's turn handlers must not see it); raises on failure.
+        """
+        body = {
+            "model": model,
+            "max_tokens": 1,
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        if self._temperature is not None:
+            body["temperature"] = self._temperature
+        headers = {"authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+            response = await client.post(
+                f"{self._base_url}/chat/completions", json=body, headers=headers
+            )
+            response.raise_for_status()
+
     async def send(
         self,
         messages: list[dict],

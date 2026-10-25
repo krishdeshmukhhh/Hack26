@@ -390,6 +390,8 @@ def run() -> int:
 
         # State → companion
         manager.state_changed.connect(companion.set_state)
+        if hasattr(companion, "celebrate"):
+            manager.walkthrough_completed.connect(companion.celebrate)
         manager.response_delta.connect(companion.text_started)
         manager.speaking_changed.connect(companion.set_speaking)
         manager.security_warning.connect(companion.security_warning)
@@ -459,6 +461,9 @@ def run() -> int:
             loop.create_task(transcription.preload())
         if isinstance(tts, KokoroTTSClient):
             loop.create_task(tts.preload())
+        if local is not None:
+            # Warm the model server's first-request path; never blocks startup.
+            loop.create_task(manager.warm_up_llm())
         if learning is not None:
             loop.create_task(learning.start())
         loop.run_forever()

@@ -114,3 +114,54 @@ def test_window_context_in_request_not_history(qt_application, monkeypatch) -> N
     first_image = next(i for i, b in enumerate(content) if b["type"] == "image")
     assert content.index({"type": "text", "text": "open windows: TEST"}) < first_image
     assert "open windows" not in json.dumps(manager._history.messages_for_request("next", []))
+
+
+_PROCS = {
+    10: (1, "explorer.exe"),
+    20: (10, "WindowsTerminal.exe"),
+    30: (20, "pwsh.exe"),
+    40: (30, "uv.exe"),
+    50: (40, "python.exe"),
+    60: (10, "WindowsTerminal.exe"),  # unrelated terminal the user opened
+}
+
+
+def test_ancestor_chain_stops_at_explorer() -> None:
+    assert window_context.ancestor_pids(50, _PROCS) == {40, 30, 20}
+    assert window_context.ancestor_pids(999, _PROCS) == frozenset()
+
+
+def test_ancestor_chain_survives_cycles() -> None:
+    assert window_context.ancestor_pids(2, {1: (2, "uv.exe"), 2: (1, "python.exe")}) == {1}
+
+
+def test_hosting_terminal_excluded_unrelated_kept() -> None:
+    ancestors = window_context.ancestor_pids(50, _PROCS)
+    host = window_context.is_own_host_window
+    assert host(100, 20, 50, 0, ancestors)  # Windows Terminal hosting us
+    assert host(101, 50, 50, 0, ancestors)  # our own window
+    assert host(102, 777, 50, 102, ancestors)  # classic console window via hwnd
+    assert not host(103, 60, 50, 102, ancestors)  # unrelated terminal
+    assert not host(104, 10, 50, 102, ancestors)  # explorer windows stay
+
+
+def test_own_ancestors_never_raises_and_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(window_context, "_ancestor_cache", None)
+
+    def boom():
+        raise OSError("no snapshot")
+
+    monkeypatch.setattr(window_context, "_process_parents", boom)
+    assert window_context._own_ancestors() == frozenset()
+    assert window_context._ancestor_cache == frozenset()
+
+
+def test_vscode_ancestor_never_excluded() -> None:
+    procs = {
+        5: (1, "Code.exe"), 6: (5, "pwsh.exe"), 7: (6, "uv.exe"), 8: (7, "python.exe"),
+    }
+    ancestors = window_context.ancestor_pids(8, procs)
+    assert ancestors == {7, 6}
+    host = window_context.is_own_host_window
+    assert host(1, 6, 8, 0, ancestors)  # terminal excluded
+    assert not host(2, 5, 8, 0, ancestors)  # VS Code windows kept

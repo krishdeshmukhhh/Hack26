@@ -68,6 +68,102 @@ def format_windows(windows: list[WindowInfo], max_windows: int = 8) -> str:
     return "\n".join(lines)
 
 
+_MAX_ANCESTOR_LEVELS = 5  # python -> uv -> shell -> OpenConsole -> WindowsTerminal
+_TH32CS_SNAPPROCESS = 0x2
+# Only these ancestors count as hosting us. Anything else (Code.exe, explorer.exe, ...)
+# owns unrelated windows and is never excluded.
+_HOST_EXES = {
+    "windowsterminal.exe", "openconsole.exe", "conhost.exe", "cmd.exe", "powershell.exe",
+    "pwsh.exe", "wt.exe", "mintty.exe", "bash.exe", "uv.exe", "python.exe", "pythonw.exe",
+}
+_ancestor_cache: frozenset[int] | None = None
+
+
+def ancestor_pids(own_pid: int, parents: dict[int, tuple[int, str]]) -> frozenset[int]:
+    """Parent-chain pids of ``own_pid``. ``parents`` maps pid -> (parent pid, exe name).
+
+    Only terminal/console hosts and our launchers are included; the walk stops at any
+    other process (Code.exe, explorer.exe, ...) and on cycles.
+    """
+    chain: set[int] = set()
+    pid = own_pid
+    for _ in range(_MAX_ANCESTOR_LEVELS):
+        entry = parents.get(pid)
+        if entry is None:
+            break
+        parent = entry[0]
+        parent_entry = parents.get(parent)
+        if not parent or parent in chain or parent == own_pid or parent_entry is None:
+            break
+        if parent_entry[1].lower() not in _HOST_EXES:
+            break
+        chain.add(parent)
+        pid = parent
+    return frozenset(chain)
+
+
+def is_own_host_window(
+    hwnd: int, pid: int, own_pid: int, console_hwnd: int, ancestors: frozenset[int]
+) -> bool:
+    """True for our own windows and the console/terminal window hosting this process."""
+    if pid == own_pid or pid in ancestors:
+        return True
+    return bool(console_hwnd) and hwnd == console_hwnd
+
+
+def _process_parents() -> dict[int, tuple[int, str]]:
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    snap = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return {}
+    parents: dict[int, tuple[int, str]] = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            parents[entry.th32ProcessID] = (entry.th32ParentProcessID, entry.szExeFile)
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return parents
+
+
+def _own_ancestors() -> frozenset[int]:
+    """Ancestor pids of this process, computed once; empty on any failure."""
+    global _ancestor_cache
+    if _ancestor_cache is None:
+        try:
+            _ancestor_cache = ancestor_pids(os.getpid(), _process_parents())
+        except Exception:  # noqa: BLE001
+            logger.debug("ancestor lookup failed", exc_info=True)
+            _ancestor_cache = frozenset()
+    return _ancestor_cache
+
+
+def _console_hwnd() -> int:
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetConsoleWindow.restype = wintypes.HWND
+        return int(kernel32.GetConsoleWindow() or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _enumerate_windows(max_windows: int) -> list[WindowInfo]:
     # Private DLL instances: setting argtypes must not leak into other modules.
     user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -126,6 +222,8 @@ def _enumerate_windows(max_windows: int) -> list[WindowInfo]:
     monitor_rect = dict(monitors)
 
     own_pid = os.getpid()
+    ancestors = _own_ancestors()
+    console_hwnd = _console_hwnd()
     foreground = user32.GetForegroundWindow()
     found: list[WindowInfo] = []
 
@@ -165,7 +263,7 @@ def _enumerate_windows(max_windows: int) -> list[WindowInfo]:
                 return True
             pid = wintypes.DWORD(0)
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if pid.value == own_pid:
+            if is_own_host_window(hwnd or 0, pid.value, own_pid, console_hwnd, ancestors):
                 return True
             buf = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buf, length + 1)

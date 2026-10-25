@@ -35,3 +35,17 @@ def test_walkthrough_examples_start_with_the_action():
     assert len(quoted) == 3
     for text in quoted:
         assert not text.startswith(("you're", "you are", "now", "great", "the desktop"))
+
+
+def test_own_terminal_and_logs_are_not_task_context():
+    prompt = build_system_prompt()
+    assert "log or console output" in prompt
+    assert "never base steps on log text" in prompt
+    assert "unless they asked about the terminal" in prompt
+
+
+def test_use_normal_app_and_no_openers_in_any_answer():
+    prompt = build_system_prompt()
+    assert "step 1 opens it" in prompt
+    assert "don't repurpose an unrelated window" in prompt
+    assert "never open any answer" in prompt

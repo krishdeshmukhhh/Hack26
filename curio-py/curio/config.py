@@ -51,6 +51,8 @@ class LocalConfig:
     tts_voice: str
     # Sampling temperature for the local LLM; low keeps answers/POINT tags steady.
     llm_temperature: float = 0.2
+    # Snap POINT targets onto real UI elements via Windows UI Automation.
+    point_snap: bool = True
 
     @classmethod
     def from_dict(cls, data: object) -> LocalConfig:
@@ -100,6 +102,10 @@ class LocalConfig:
                 f"local.llm_temperature must be a number between 0 and 2, got {llm_temperature!r}"
             )
 
+        point_snap = data.get("point_snap", True)
+        if not isinstance(point_snap, bool):
+            raise ConfigError(f"local.point_snap must be true or false, got {point_snap!r}")
+
         return cls(
             llm_base_url=llm_base_url,
             llm_model=llm_model,
@@ -110,6 +116,7 @@ class LocalConfig:
             tts_engine=tts_engine,
             tts_voice=_str("tts_voice", ""),
             llm_temperature=float(llm_temperature),
+            point_snap=point_snap,
         )
 
 
@@ -299,6 +306,11 @@ class Config:
     @property
     def point_coords(self) -> str:
         return self.local.point_coords if self.local is not None else "pixel"
+
+    @property
+    def point_snap(self) -> bool:
+        """UI Automation snapping is for the local VLM; off for the cloud backend."""
+        return self.local.point_snap if self.local is not None else False
 
     @classmethod
     def from_path(cls, path: Path) -> Config:

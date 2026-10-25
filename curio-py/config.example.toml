@@ -41,6 +41,10 @@ llm_temperature = 0.2
 # Coordinate format the model uses for pointing. "norm1000" for Qwen3-VL,
 # "pixel" for Qwen2.5-VL and most other models.
 point_coords = "norm1000"
+# Snap each [POINT] onto the real control it names (Windows UI Automation: matches the
+# label to nearby buttons, tabs, menu items, taskbar icons...). Adds ~15-100 ms and
+# falls back to the model's point when nothing matches. Set false to disable.
+point_snap = true
 # faster-whisper model: "base.en" (~1 s per question on a laptop CPU),
 # "small.en" (more accurate but 2-5 s on CPU; fine with whisper_device =
 # "cuda"), "large-v3" (best, needs "cuda").

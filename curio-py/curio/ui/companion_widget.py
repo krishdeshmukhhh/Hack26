@@ -41,6 +41,7 @@ from curio.ui.flight import (
     landing_point,
 )
 from curio.ui.focus_overlay import logical_target
+from curio.ui.landing import LandingBounce
 from curio.ui.pointer_bubble import (
     CURSOR_BLUE,
     ERROR_RED,
@@ -50,6 +51,7 @@ from curio.ui.pointer_bubble import (
     step_caption,
 )
 from curio.ui.target_ring import TargetRingOverlay
+from curio.ui.theme import RIM_WIDTH, RING_WIDTH
 from curio.ui.window_effects import make_overlay_window, raise_without_activating
 
 logger = logging.getLogger(__name__)
@@ -120,6 +122,8 @@ class CompanionWidget(QWidget):
         self._hidden_for_capture = False
         self._capture_depth = 0
         self.target_ring = TargetRingOverlay(self)
+        self._landing = LandingBounce(self.update, self)
+        self._check_started_ms: int | None = None  # walkthrough-finished check mark
 
         # Pointing
         self._hold = False
@@ -185,6 +189,8 @@ class CompanionWidget(QWidget):
     def hide(self) -> None:
         self._hidden_for_capture = False
         self.target_ring.clear()
+        self._landing.stop()
+        self._check_started_ms = None
         self._frame_timer.stop()
         self.bubble.hide_now()
         super().hide()
@@ -229,7 +235,13 @@ class CompanionWidget(QWidget):
         super().closeEvent(event)
 
     def raise_overlays(self) -> None:
-        """Bring the buddy and its pill above other topmost overlays, without focus."""
+        """Bring the buddy and its pill above other topmost overlays, without focus.
+
+        The spotlight calls this the moment it appears, so it is also the handoff
+        point: the target ring's pulse fades out and the spotlight ring takes over.
+        With the spotlight off this is never called and the pulse plays out.
+        """
+        self.target_ring.fade_out()
         raise_without_activating(self.bubble)
         raise_without_activating(self)
 
@@ -334,8 +346,72 @@ class CompanionWidget(QWidget):
     def _arrive_at_target(self) -> None:
         self._mode = _Mode.POINTING
         self._rotation = REST_ROTATION_DEGREES
+        self._start_landing()
         self.bubble.show_text(self._caption, self._bubble_anchor(), on_typed=self._pointer_typed)
         self.pointer_arrived.emit()
+
+    def _reduced_motion(self) -> bool:
+        return False
+
+    def _start_landing(self) -> None:
+        """Squash-and-settle on arrival; only while visible and motion is allowed."""
+        if self.isVisible() and not self._reduced_motion():
+            self._landing.start()
+
+    # ------------------------------------------------------------------
+    # Walkthrough finished
+    # ------------------------------------------------------------------
+
+    CHECK_MS = 1100
+
+    def celebrate(self) -> None:
+        """A brief accent check-mark flourish (the pet overrides this with a clip)."""
+        if self.isVisible():
+            self._check_started_ms = self._clock.elapsed()
+            self.update()
+
+    def _check_progress(self) -> float | None:
+        if self._check_started_ms is None:
+            return None
+        progress = (self._clock.elapsed() - self._check_started_ms) / self.CHECK_MS
+        if progress >= 1.0:
+            self._check_started_ms = None
+            return None
+        return progress
+
+    def _paint_check(self, painter: QPainter, c: QPointF) -> None:
+        """Check mark drawn in over the first third, held, then faded; rises a little."""
+        progress = self._check_progress()
+        if progress is None:
+            return
+        draw = min(1.0, progress / 0.3)
+        alpha = 1.0 if progress < 0.7 else (1.0 - progress) / 0.3
+        origin = QPointF(c.x(), c.y() - 18 - 6 * progress)
+        points = (QPointF(-6, 0), QPointF(-2, 4.5), QPointF(6, -5))
+        painter.save()
+        painter.translate(origin)
+        glow = QColor(CURSOR_BLUE)
+        glow.setAlphaF(0.25 * alpha)
+        painter.setBrush(glow)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(0, 0), 11, 11)
+        pen = QPen(Qt.PenStyle.SolidLine)
+        pen.setWidthF(RING_WIDTH + 0.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        color = QColor(CURSOR_BLUE)
+        color.setAlphaF(alpha)
+        pen.setColor(color)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        first = points[1] - points[0]
+        second = points[2] - points[1]
+        if draw < 0.4:
+            painter.drawLine(points[0], points[0] + first * (draw / 0.4))
+        else:
+            painter.drawLine(points[0], points[1])
+            painter.drawLine(points[1], points[1] + second * ((draw - 0.4) / 0.6))
+        painter.restore()
 
     def _pointer_typed(self) -> None:
         if self._mode != _Mode.POINTING or self._hold:
@@ -399,6 +475,8 @@ class CompanionWidget(QWidget):
             self._spin_degrees = (self._spin_degrees + 360 * self.FRAME_MS / 800) % 360
         if self.bubble.active and self._mode != _Mode.RETURNING:
             self.bubble.move_to(self._bubble_anchor())
+        if self._check_started_ms is not None:
+            self._check_progress()  # expires the flourish
         self.update()
 
     # ------------------------------------------------------------------
@@ -504,6 +582,7 @@ class CompanionWidget(QWidget):
             glow = 8 + (self._flight_scale - 1.0) * 20
             self._paint_glow(painter, c, color, glow * 1.6, 0.45)
             self._paint_triangle(painter, c, color)
+        self._paint_check(painter, c)
         painter.end()
 
     def _paint_glow(
@@ -522,13 +601,13 @@ class CompanionWidget(QWidget):
 
     def _paint_triangle(self, painter: QPainter, c: QPointF, color: QColor) -> None:
         # Equilateral, centred on its centroid (the Swift Triangle shape).
-        size = self.TRIANGLE_SIZE * self._flight_scale
+        size = self.TRIANGLE_SIZE * self._flight_scale * self._landing.scale
         height = size * math.sqrt(3) / 2
         painter.save()
         painter.translate(c)
         painter.rotate(self._rotation)
         # White rim so the blue triangle stays visible on blue/dark backgrounds.
-        rim = QPen(QColor(255, 255, 255, 230), 1.6)
+        rim = QPen(QColor(255, 255, 255, 230), RIM_WIDTH)
         rim.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(rim)
         painter.setBrush(color)

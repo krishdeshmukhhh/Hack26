@@ -29,6 +29,7 @@ from curio.ui.pointer_bubble import (
     random_pointer_phrase,
     step_caption,
 )
+from curio.ui.window_effects import raise_without_activating
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class PetCompanionWidget(CompanionWidget):
         self._arrival_sent = True
         self._pill_visit = False  # pointer pill is up for the current visit
         self._bounds: tuple[float, float, float, float] | None = None  # sprite clamp rect
+        self._on_taskbar = False  # pointing at a target outside the work area
         super().__init__(parent)
         self.setFixedSize(self.WIDGET_W, self.WIDGET_H)
         self._load_pet()
@@ -148,6 +150,15 @@ class PetCompanionWidget(CompanionWidget):
         self._pill_visit = True
         self.bubble.show_text(caption, self._pill_anchor)
 
+    def celebrate(self):
+        """Walkthrough finished: the sprite's jump clip, else the check-mark flourish."""
+        if self.catalog is not None and self.isVisible() and self.play_clip("jump"):
+            return
+        super().celebrate()
+
+    def _reduced_motion(self):
+        return self.settings.reduced_motion
+
     def release_hold(self):
         if self.catalog is None:
             return super().release_hold()
@@ -193,6 +204,7 @@ class PetCompanionWidget(CompanionWidget):
             tx, ty = max(left, min(right, tx)), max(top, min(bottom, ty))
         if math.hypot(px - tx, py - ty) <= self.ARRIVAL_DISTANCE:
             self._arrival_sent = True
+            self._start_landing()
             self.pointer_arrived.emit()
 
     def _snap_to_cursor(self):
@@ -227,6 +239,7 @@ class PetCompanionWidget(CompanionWidget):
         if self.controller.point_active and self._point_screen in QApplication.screens():
             screen = self._point_screen
         geo = screen.availableGeometry()
+        walk_geo = self._walk_geometry(screen, geo)
         placement = compute_position(
             cursor.x(),
             cursor.y(),
@@ -236,10 +249,10 @@ class PetCompanionWidget(CompanionWidget):
         )
         destination = (placement.x, placement.y)
         bounds = (
-            geo.left(),
-            geo.top(),
-            max(geo.left(), geo.right() + 1 - self.WIDGET_W),
-            max(geo.top(), geo.bottom() + 1 - self.WIDGET_H),
+            walk_geo.left(),
+            walk_geo.top(),
+            max(walk_geo.left(), walk_geo.right() + 1 - self.WIDGET_W),
+            max(walk_geo.top(), walk_geo.bottom() + 1 - self.WIDGET_H),
         )
         self._bounds = bounds
         if force and not self._position_initialized:
@@ -247,7 +260,7 @@ class PetCompanionWidget(CompanionWidget):
             self._position_initialized = True
         # Cross monitor gaps directly; never linger in inaccessible desktop space.
         px, py = self.controller.position
-        if not geo.contains(QPoint(int(px), int(py))):
+        if not walk_geo.contains(QPoint(int(px), int(py))):
             self.controller.position = destination
         pos = self.controller.update(dt, destination, bounds)
         self.move(round(pos[0]), round(pos[1]))
@@ -261,6 +274,23 @@ class PetCompanionWidget(CompanionWidget):
         )
         self.update()
 
+    def _walk_geometry(self, screen, available):
+        """Work area, or the whole screen while pointing at the taskbar (Start, tray icons).
+
+        The sprite then lands beside the target, still clamped fully on screen.
+        """
+        coords = self._point_coords
+        if coords is None or not self.controller.point_active:
+            self._on_taskbar = False
+            return available
+        full = screen.geometry()
+        target = QPoint(round(coords[0]), round(coords[1]))
+        on_taskbar = full.contains(target) and not available.contains(target)
+        if on_taskbar and not self._on_taskbar:
+            raise_without_activating(self)  # stay above the (topmost) taskbar
+        self._on_taskbar = on_taskbar
+        return full if on_taskbar else available
+
     def restore_after_capture(self):
         self._last_tick = time.monotonic()
         super().restore_after_capture()
@@ -273,6 +303,12 @@ class PetCompanionWidget(CompanionWidget):
         painter.setOpacity(self._opacity)
         frame = self._frames[self._frame]
         painter.save()
+        squash = self._landing.scale
+        if squash != 1.0:
+            # Landing bounce: scale about the feet so the sprite never shifts layout.
+            painter.translate(self.PET_SIZE / 2, self.PET_SIZE)
+            painter.scale(squash, squash)
+            painter.translate(-self.PET_SIZE / 2, -self.PET_SIZE)
         if self.controller.facing_left:
             painter.translate(self.PET_SIZE, 0)
             painter.scale(-1, 1)
@@ -282,7 +318,7 @@ class PetCompanionWidget(CompanionWidget):
             x, y = self._point_coords
             x -= self.x()
             y -= self.y()
-            painter.setPen(QColor("#4a9eff"))
+            painter.setPen(QColor(CURSOR_BLUE))
             painter.drawEllipse(QPointF(x, y), 5, 5)
         # Beside the pet: the listening waveform and thinking spinner from the
         # base widget. While speaking, the pet's own animation carries it.
@@ -293,4 +329,5 @@ class PetCompanionWidget(CompanionWidget):
             self._paint_waveform(painter, indicator, color)
         elif self._state == VoiceState.PROCESSING:
             self._paint_spinner(painter, indicator, color)
+        self._paint_check(painter, QPointF(self.PET_SIZE + 18, 30))
         painter.end()

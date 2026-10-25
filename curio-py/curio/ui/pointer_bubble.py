@@ -16,10 +16,11 @@ from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer, QVariantAn
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from curio.ui.theme import ACCENT, CORNER_RADIUS, GLOW_ALPHA, RIM_WIDTH
+from curio.ui.theme import ERROR_RED as ERROR_RED  # re-exported for the companions
 from curio.ui.window_effects import make_overlay_window
 
-CURSOR_BLUE = "#3380FF"  # DS.Colors.overlayCursorBlue in the Swift app
-ERROR_RED = "#E5484D"
+CURSOR_BLUE = ACCENT  # DS.Colors.overlayCursorBlue in the Swift app
 
 POINTER_PHRASES = (
     "right here!",
@@ -35,7 +36,6 @@ POINTER_PHRASES = (
 FONT_PIXEL_SIZE = 15  # was 12
 PADDING_X = 11  # was 8
 PADDING_Y = 6  # was 4
-CORNER_RADIUS = 8  # was 6
 # Room around the pill for its glow.
 GLOW_MARGIN = 18
 
@@ -265,7 +265,7 @@ class PointerBubble(QWidget):
         # Glow: brighter and wider while popping in, settling to a soft halo.
         settle = max(0.0, min(1.0, (1.0 - self._scale) * 2))
         radius = 6 + settle * 10
-        alpha = 0.5 + settle * 0.5
+        alpha = GLOW_ALPHA + settle * (1 - GLOW_ALPHA)
         painter.setPen(Qt.PenStyle.NoPen)
         steps = 6
         for i in range(steps, 0, -1):
@@ -280,7 +280,7 @@ class PointerBubble(QWidget):
 
         painter.setBrush(self._color)
         # Light rim keeps the pill's edge visible on dark and blue backgrounds.
-        painter.setPen(QPen(QColor(255, 255, 255, 215), 1.5))
+        painter.setPen(QPen(QColor(255, 255, 255, 215), RIM_WIDTH))
         painter.drawRoundedRect(pill, CORNER_RADIUS, CORNER_RADIUS)
         painter.setFont(self._font)
         text_rect = pill.adjusted(PADDING_X, 0, 0, 0)

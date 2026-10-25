@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -23,6 +24,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QByteArray, QObject, QTimer, Signal
 
+from curio import ui_automation
 from curio.active_window import get_foreground_window_title
 from curio.click_watcher import ClickWatcher
 from curio.clients.kokoro_tts_client import KokoroTTSClient
@@ -54,14 +56,17 @@ from curio.point_mapper import map_point_to_screen
 from curio.point_parser import (
     PointTag,
     StepTag,
+    find_point_tag,
     parse_concepts_tag,
     parse_point_tag,
     parse_step_tag,
 )
 from curio.prompts import build_system_prompt, is_howto_question, walkthrough_reminder
-from curio.screen_capture import ScreenshotImage
+from curio.screen_capture import ScreenshotImage, cursor_position, grab_probe
+from curio.settle import SETTLE_MASK_RADIUS_PX, SETTLE_MAX_SECONDS, wait_for_settle
 from curio.speech_chunker import SpeechChunker
 from curio.state import VoiceState
+from curio.ui_automation import SnapResult, snap_point
 from curio.window_context import describe_windows
 
 if TYPE_CHECKING:
@@ -69,9 +74,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# After the user's click, give the app a moment to react (menus open,
-# dialogs appear) before taking the next step's screenshot.
-WALKTHROUGH_SETTLE_SECONDS = 0.8
+_CONCEPTS_DONE_RE = re.compile(r"\[CONCEPTS:[^\]]*\]")
+
+# After the user's click, wait at most this long for the app to react (menus
+# open, dialogs appear) before taking the next step's screenshot. The wait ends
+# early once the screen changed and went still (see curio.settle).
+WALKTHROUGH_SETTLE_SECONDS = SETTLE_MAX_SECONDS
 # Give up waiting for the user to do a step after this long.
 WALKTHROUGH_TIMEOUT_MS = 120_000
 
@@ -131,6 +139,8 @@ class CompanionManager(QObject):
     # walkthrough step / total (0, 0 outside a walkthrough).
     response_annotated = Signal(str, int, int)
     walkthrough_ended = Signal()
+    # Only when the model finishes a walkthrough (not Esc, cancel, timeout or error).
+    walkthrough_completed = Signal()
     speaking_changed = Signal(bool)
     security_warning = Signal(str)
 
@@ -194,6 +204,19 @@ class CompanionManager(QObject):
         self._marks: dict[str, float] = {}
         self._hands_free_recording = False
         self._strip_hands_free_command = False
+        # Early flight: the [POINT] tag is acted on as soon as it streams in.
+        self._stream_text = ""
+        self._stream_point_active = False
+        self._early_flight: PointTag | None = None
+        self._early_task: asyncio.Task[None] | None = None
+        self._keep_spotlight = False
+        # (x, y, label) -> SnapResult | None; replaceable in tests.
+        self._snap_fn: Callable[..., Any] = snap_point
+        self._warmed_up = False
+        self._settle_seconds: float | None = None
+        self._settle_mask_center: tuple[int, int] | None = None
+        # Async () -> ProbeFrame | None for the adaptive settle; None = default grab.
+        self._settle_grab: Callable[[], Any] | None = None
 
         # Guided walkthrough: the step the user is currently doing, if any.
         self._walkthrough: StepTag | None = None
@@ -296,6 +319,23 @@ class CompanionManager(QObject):
             finally:
                 for controller in reversed(hidden):
                     controller.restore_after_capture()
+
+    async def warm_up_llm(self) -> None:
+        """Best-effort one-token request to the local model; never raises, runs once."""
+        if self._config.point_snap:
+            ui_automation.prewarm()
+        warm = getattr(self._llm, "warm_up", None)
+        if warm is None or self._warmed_up:
+            return
+        self._warmed_up = True
+        started = time.monotonic()
+        try:
+            await warm(self._current_model)
+            logger.info("llm warm-up done in %.2fs", time.monotonic() - started)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.info("llm warm-up skipped: %s", exc)
 
     async def aclose(self) -> None:
         """Retire asynchronous work and walkthrough timers before Qt shuts down."""
@@ -615,6 +655,8 @@ class CompanionManager(QObject):
                 chunker, queue = self._speech
                 for chunk in chunker.feed(text):
                     queue.put_nowait(chunk)
+            if self._stream_point_active and self._early_flight is None:
+                self._maybe_fly_early(text)
 
     # ------------------------------------------------------------------
     # Error handler
@@ -657,14 +699,85 @@ class CompanionManager(QObject):
         start = self._marks.get("start")
         if start is None:
             return
-        parts = [f"{k}={self._marks[k] - start:.2f}s" for k in
-                 ("captured", "first_token", "first_audio", "llm_done")
-                 if k in self._marks]
+        parts = []
+        if self._settle_seconds is not None:
+            parts.append(f"settle={self._settle_seconds:.2f}s")
+        parts += [f"{k}={self._marks[k] - start:.2f}s" for k in
+                  ("captured", "first_token", "first_audio", "fly", "llm_done")
+                  if k in self._marks]
         logger.info("turn timings: %s total=%.2fs", " ".join(parts), time.monotonic() - start)
         self._marks = {}
+        self._settle_seconds = None
+
+    def _maybe_fly_early(self, delta: str) -> None:
+        """Fly to the POINT target the moment its tag is complete in the stream.
+
+        The tag normally precedes [STEP]/[CONCEPTS], so wait until one of those
+        has also completed (or the stream ends) to know the hold/step semantics.
+        Anything unparseable falls back to the end-of-reply flight.
+        """
+        self._stream_text += delta
+        if "]" not in delta:
+            return
+        text = self._stream_text
+        point = find_point_tag(text)
+        if point is None:
+            return
+        _, step = parse_step_tag(text)
+        if step is None and not _CONCEPTS_DONE_RE.search(text):
+            return
+        self._early_flight = point
+        coords = map_point_to_screen(point, self._current_screenshots, self._config.point_coords)
+        if coords is None:
+            return
+        self._mark("fly")
+        if not self._config.point_snap:
+            self._fly(coords, step, "POINT (early)", point.label)
+            return
+        self._early_task = asyncio.ensure_future(
+            self._snap_then_fly(coords, step, "POINT (early)", point.label, self._generation)
+        )
+
+    async def _snap_then_fly(
+        self,
+        coords: tuple[int, int],
+        step: StepTag | None,
+        tag: str,
+        label: str,
+        generation: int,
+    ) -> None:
+        """Snap the model's point onto a real UI element, then fly once."""
+        coords = await self._snap(coords, label)
+        if generation != self._generation:
+            return  # the turn was cancelled or superseded while snapping
+        self._fly(coords, step, tag, label)
+
+    async def _snap(self, coords: tuple[int, int], label: str) -> tuple[int, int]:
+        """Return the UIA-snapped coords, or the model's own when unsure (never raises)."""
+        if not self._config.point_snap:
+            return coords
+        try:
+            result: SnapResult | None = await self._snap_fn(coords[0], coords[1], label)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("POINT snap failed: %s", exc)
+            return coords
+        return (result.x, result.y) if result is not None else coords
+
+    def _fly(
+        self, coords: tuple[int, int], step: StepTag | None, tag: str, label: str
+    ) -> None:
+        if self._spotlight is not None:
+            self._spotlight.point_started(coords[0], coords[1], hold=step is not None)
+        self._panel_visibility_controller.fly_to(
+            coords[0],
+            coords[1],
+            hold=step is not None,
+            step=(step.index, step.total) if step is not None else None,
+        )
+        logger.info("%s: (%d, %d) label=%s", tag, coords[0], coords[1], label)
 
     def _hide_spotlight(self) -> None:
-        if self._spotlight is not None:
+        if self._spotlight is not None and not self._keep_spotlight:
             self._spotlight.hide()
 
     def _stop_speaking(self) -> None:
@@ -711,6 +824,8 @@ class CompanionManager(QObject):
         if was_active:
             logger.info("walkthrough ended")
             self.walkthrough_ended.emit()
+            if completed and outcome == StepOutcome.SUCCEEDED:
+                self.walkthrough_completed.emit()
         if self._state == VoiceState.GUIDING:
             self._set_state(VoiceState.IDLE)
 
@@ -730,9 +845,28 @@ class CompanionManager(QObject):
         self._cancel_flag = False
         self._current_task = asyncio.ensure_future(self._continue_walkthrough(step))
 
+    async def _settle_probe(self) -> Any:
+        """One cheap grab of the monitor the step was on (off the UI thread)."""
+        shots = self._current_screenshots
+        left, top = (shots[0].monitor_left, shots[0].monitor_top) if shots else (0, 0)
+        return await asyncio.to_thread(
+            grab_probe, left, top,
+            mask_center=self._settle_mask_center,
+            mask_radius_px=SETTLE_MASK_RADIUS_PX,
+        )
+
     async def _continue_walkthrough(self, step: StepTag) -> None:
         try:
-            await asyncio.sleep(WALKTHROUGH_SETTLE_SECONDS)
+            if WALKTHROUGH_SETTLE_SECONDS > 0:
+                try:
+                    self._settle_mask_center = cursor_position()
+                except Exception:  # noqa: BLE001
+                    self._settle_mask_center = None
+                self._settle_seconds = await wait_for_settle(
+                    self._settle_grab or self._settle_probe,
+                    max_seconds=WALKTHROUGH_SETTLE_SECONDS,
+                )
+                logger.debug("walkthrough settle: %.2fs", self._settle_seconds)
         except asyncio.CancelledError:
             self._set_state(VoiceState.IDLE)
             return
@@ -933,6 +1067,11 @@ class CompanionManager(QObject):
             if generation != self._generation:
                 return
             self._marks = {"start": time.monotonic()}
+            if continuing_step is None:
+                self._settle_seconds = None
+            self._stream_text = ""
+            self._stream_point_active = False
+            self._early_flight = None
 
             # Emit the final transcript so the UI can display it.
             self.final_transcript.emit(text)
@@ -1048,6 +1187,8 @@ class CompanionManager(QObject):
                     self._speak_task = asyncio.ensure_future(
                         self._speak("", generation, chunks=self._queue_chunks(queue))
                     )
+                # Fly to the [POINT] target as soon as its tag has streamed in.
+                self._stream_point_active = True
                 try:
                     full_text = await self._llm.send(
                         messages,
@@ -1055,10 +1196,12 @@ class CompanionManager(QObject):
                         model=self._current_model,
                     )
                 except BaseException:
+                    self._stream_point_active = False
                     # Cancelled or failed mid-answer: drop any queued audio.
                     if generation == self._generation and self._speech is not None:
                         self._stop_speaking()
                     raise
+                self._stream_point_active = False
                 self._mark("llm_done")
 
             # Only commit to history and emit completion if not cancelled.
@@ -1096,30 +1239,26 @@ class CompanionManager(QObject):
                         step, spoken_text, point_tag, concepts,
                         window_title=window_title, task=task_key(text),
                     )
-                self._update_walkthrough(step)
+                # An early flight already showed the spotlight; keep it.
+                flew_early = self._early_flight is not None
+                self._keep_spotlight = flew_early
+                try:
+                    self._update_walkthrough(step)
+                finally:
+                    self._keep_spotlight = False
                 if step is not None and self._focus is not None:
                     self._focus.walkthrough_step(step.index, spoken_text, concepts)
                 # POINT:none (or an unmappable point) means no spotlight.
-                self._hide_spotlight()
-                if point_tag is not None:
+                if not flew_early:
+                    self._hide_spotlight()
+                if point_tag is not None and not flew_early:
                     coords = map_point_to_screen(
                         point_tag, screenshots, self._config.point_coords
                     )
                     if coords is not None:
-                        if self._spotlight is not None:
-                            self._spotlight.point_started(
-                                coords[0], coords[1], hold=step is not None
-                            )
-                        self._panel_visibility_controller.fly_to(
-                            coords[0],
-                            coords[1],
-                            hold=step is not None,
-                            step=(step.index, step.total) if step is not None else None,
-                        )
-                        logger.info(
-                            "POINT: (%d, %d) label=%s",
-                            coords[0], coords[1], point_tag.label,
-                        )
+                        coords = await self._snap(coords, point_tag.label)
+                        if generation == self._generation:
+                            self._fly(coords, step, "POINT", point_tag.label)
 
                 if speech is not None:
                     # Already speaking sentence by sentence: queue the tail and close.

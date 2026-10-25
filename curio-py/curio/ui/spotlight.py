@@ -34,7 +34,7 @@ from PySide6.QtWidgets import QWidget
 
 from curio.config import UiSettings
 from curio.ui.focus_overlay import logical_target
-from curio.ui.pointer_bubble import CURSOR_BLUE
+from curio.ui.theme import ACCENT, GLOW_WIDTH, RING_WIDTH
 from curio.ui.window_effects import (
     make_non_activating,
     make_overlay_window,
@@ -76,7 +76,7 @@ class SpotlightOverlay(QWidget):
         self._dim_level = 1.0     # 1 = full dim, 0 = ring only (animated)
         self._opacity = 0.0       # master fade for dim and ring
         self._center = QPointF()
-        self._color = QColor(CURSOR_BLUE)
+        self._color = QColor(ACCENT)
         self._fading_out = False
         self._suspended = False
 
@@ -238,12 +238,12 @@ class SpotlightOverlay(QWidget):
         radius = HOLE_RADIUS + 3 * pulse
         glow = QColor(self._color)
         glow.setAlphaF(0.10 + 0.14 * pulse)
-        painter.setPen(QPen(glow, 9))
+        painter.setPen(QPen(glow, GLOW_WIDTH))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(c, radius, radius)
         ring = QColor(self._color)
         ring.setAlphaF(0.55 + 0.40 * pulse)
-        painter.setPen(QPen(ring, 2.5))
+        painter.setPen(QPen(ring, RING_WIDTH))
         painter.drawEllipse(c, radius, radius)
         painter.end()
 

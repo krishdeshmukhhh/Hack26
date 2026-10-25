@@ -61,10 +61,24 @@ async def settle(rounds: int = 5) -> None:
         await asyncio.sleep(0)
 
 
-async def drain(runtime: FocusRuntime) -> None:
-    """Wait for everything the runtime spawned (SQLite work runs on threads)."""
-    while runtime._tasks:
-        await asyncio.gather(*tuple(runtime._tasks), return_exceptions=True)
+async def drain(runtime: FocusRuntime, timeout: float = 5.0) -> None:
+    """Wait for everything the runtime spawned (SQLite work runs on threads).
+
+    Bounded: a stuck task fails the test with its repr instead of hanging the suite.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        # A finished task stays in ``_tasks`` until its done-callback runs on the next loop
+        # turn, and gather() over only-finished tasks never yields; so ignore finished ones
+        # and always yield, or this loop spins forever without letting the callback run.
+        pending = [t for t in runtime._tasks if not t.done()]
+        if not pending:
+            break
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise AssertionError(f"focus runtime tasks did not finish in {timeout}s: {pending!r}")
+        await asyncio.wait(pending, timeout=remaining)
     await settle()
 
 

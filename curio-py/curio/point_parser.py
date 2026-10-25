@@ -19,6 +19,24 @@ _POINT_RE = re.compile(
 )
 
 
+_POINT_ANYWHERE_RE = re.compile(
+    r"\[POINT:(\d+)\s*,\s*(\d+)(?::([^\]:\s][^\]:]*?))?(?::screen(\d+))?\]"
+)
+
+
+def find_point_tag(text: str) -> PointTag | None:
+    """Return the first complete [POINT:x,y...] tag anywhere in a (partial) stream."""
+    m = _POINT_ANYWHERE_RE.search(text)
+    if not m:
+        return None
+    return PointTag(
+        x=int(m.group(1)),
+        y=int(m.group(2)),
+        label=m.group(3) or "",
+        screen=int(m.group(4)) if m.group(4) else None,
+    )
+
+
 def parse_point_tag(response: str) -> tuple[str, PointTag | None]:
     """Parse a POINT tag from end of response. Returns (spoken_text, tag_or_none)."""
     m = _POINT_RE.search(response)
