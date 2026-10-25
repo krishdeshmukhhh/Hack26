@@ -558,6 +558,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         if urlsplit(self.path).path != "/v1/walkthroughs":
+            # Closing with unread request bytes can reset the connection on
+            # Windows before the client receives the 404. Drain bounded bodies
+            # just as we do for oversized walkthrough submissions below.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = -1
+            if 0 <= length <= MAX_DRAIN_BYTES:
+                self.rfile.read(length)
+            else:
+                self.close_connection = True
             self._error(HTTPStatus.NOT_FOUND, "not found")
             return
         try:

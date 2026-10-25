@@ -1,6 +1,7 @@
 """Real SQLite/learning/retrieval integration with temporary local settings."""
 
 import asyncio
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -220,7 +221,26 @@ asyncio.run(main())
         assert result.returncode == 0, result.stderr
 
 
-def test_app_initializes_shared_runtime_and_closes_it(qt_application, tmp_path, monkeypatch):
+@pytest.mark.parametrize("focus_enabled", [False, True])
+def test_app_initializes_shared_runtime_and_closes_it(
+    qt_application, tmp_path, monkeypatch, focus_enabled,
+):
+    # Each real app lifecycle owns a Qt/qasync loop. Exercise enabled/disabled
+    # startup in fresh processes rather than rebuilding native Qt objects in
+    # a QApplication shared with the rest of this suite.
+    if os.environ.get("CURIO_APP_STARTUP_CHILD") != "1":
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pytest",
+                f"{__file__}::test_app_initializes_shared_runtime_and_closes_it[{focus_enabled}]",
+                "-q", "-p", "no:cacheprovider", "--basetemp", str(tmp_path / "child"),
+            ],
+            env={**os.environ, "CURIO_APP_STARTUP_CHILD": "1"},
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return
+
     from unittest.mock import MagicMock
 
     import qasync
@@ -255,7 +275,10 @@ def test_app_initializes_shared_runtime_and_closes_it(qt_application, tmp_path, 
             pass
 
     path = tmp_path / "config.toml"
-    path.write_text('worker_url = "https://example.test"\n')
+    path.write_text(
+        'worker_url = "https://example.test"\n'
+        f'[focus]\nenabled = {str(focus_enabled).lower()}\n'
+    )
     config = Config.from_path(path)
     monkeypatch.setattr(
         application,
@@ -290,6 +313,19 @@ def test_app_initializes_shared_runtime_and_closes_it(qt_application, tmp_path, 
         return runtime
 
     monkeypatch.setattr(application, "MemoryRuntime", make_runtime)
+    focus_modes = []
+    real_build_focus = application.build_focus_mode
+
+    def build_focus(*args, **kwargs):
+        kwargs.update(data_dir=tmp_path, llm=None)
+        mode = real_build_focus(*args, **kwargs)
+        focus_modes.append(mode)
+        return mode
+
+    monkeypatch.setattr(application, "build_focus_mode", build_focus)
+    focus_settings = MagicMock()
+    focus_settings.value.return_value = []
+    monkeypatch.setattr(application, "QSettings", lambda *args: focus_settings)
     original_loop = qasync.QEventLoop
 
     def make_loop(app):
@@ -305,4 +341,17 @@ def test_app_initializes_shared_runtime_and_closes_it(qt_application, tmp_path, 
     assert runtimes[0]._store._closed
     tray.show_memory_requested.connect.assert_called()
     assert not (tmp_path / "memory.sqlite3").exists()
+    assert len(focus_modes) == int(focus_enabled)
+    if focus_enabled:
+        mode = focus_modes[0]
+        assert mode.runtime._closed and not mode.runtime.source.running
+        assert mode.runtime.store._closed
+        assert mode.runtime.classifier._corrections._closed
+        tray.set_focus_available.assert_called_once_with(True)
+        tray.start_focus_requested.connect.assert_called_once()
+        tray.end_focus_requested.connect.assert_called_once()
+        tray.show_focus_history_requested.connect.assert_called_once()
+        focus_settings.setValue.assert_called_once()
+    else:
+        tray.set_focus_available.assert_not_called()
     asyncio.set_event_loop(None)

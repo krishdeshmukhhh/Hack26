@@ -32,6 +32,77 @@ overlay lifecycle. Mixed-DPI visuals, click-through over other applications,
 real microphone/TTS behavior and elevated Windows applications still need
 interactive verification.
 
+## Focus and study sessions
+
+Focus controls are enabled by default. Choose tray **Start focus session…**, or
+say “Curio, I'm doing my Excel assignment for 25 minutes” through the normal
+voice input. Review the goal, duration, allowed apps, break style, strict setting
+and editable if-then plans, then start. Strict mode changes reminders; it does
+not block apps. The live window shows remaining time and on-goal/drift/break
+totals. Use card buttons or matching spoken choices such as “not a distraction”
+or “snooze”. Say “take a break” or “end the session”, or use the tray's **End
+focus session**. Ending opens a summary with reflection and up to three review
+questions. Due questions from earlier sessions can also be offered at startup.
+**Focus history…** opens saved summaries and confirmed deletion controls.
+
+During an active session, ordinary voice help uses the study coach's hint ladder;
+walkthrough progress supplies resume notes and practised concepts. Explicit
+tutorial/integral coaching modes retain their own voice routing. Focus nudges
+speak only when the existing voice pipeline is idle.
+
+Optional settings in `%APPDATA%\Curio\config.toml` (restart after editing):
+
+```toml
+[focus]
+enabled = true
+study_minutes = 25
+break_minutes = 5
+break_style = "fixed" # "fixed", "self_paced", or "none"
+strict = false
+max_check_ins_per_hour = 3
+snooze_minutes = 10
+quiet_hours = [] # e.g. [["22:00", "07:00"]], local time
+model_judgments = true
+sample_seconds = 2.0
+drift_after_seconds = 90.0
+```
+
+`study_minutes`/`break_minutes` set the work/break cycle; session duration is
+chosen separately in the start panel. `enabled = false` removes the focus tray
+controls and voice hooks. Quiet hours, snooze and the hourly limit govern policy
+nudges. Brief reference lookups are allowed; sustained drift triggers reminders.
+
+**Privacy:** sampling runs only during an active focus session. Every two
+seconds by default it reads the foreground app (resolved from the executable),
+window title, idle seconds, input-activity count, switch flag and timestamp.
+Browser title changes count as switches. Input activity counts 250 ms polling
+ticks that saw new input, not individual keys or their contents. Focus sensing
+does not capture screenshots, page bodies or audio. Ordinary voice help still
+uses the normal microphone and screenshot pipeline.
+
+When rules and corrections cannot classify a window, `model_judgments = true`
+allows sending the goal, app and up to 300 title characters to the configured
+model backend, which may be remote even with `backend = "local"` (for example,
+the lab server). Set it to `false` to prevent classifier title requests.
+If-then suggestions, card wording and quiz generation can still send their text
+context to the model; this setting is not an offline switch.
+
+Raw samples are not saved. In the Curio user-data directory, summaries store
+goals, totals, concepts, reflections and distraction app keys in
+`focus_sessions.sqlite3`; false-alarm corrections store app keys, normalized
+title patterns and judgments in `focus_corrections.sqlite3`; review questions
+and schedules live in `study_reviews.sqlite3`. Normalized patterns may still
+contain sensitive title words. **Focus history… → Delete all history…** clears
+all three stores after confirmation. It leaves ordinary memory and QSettings
+wording-variant preferences intact.
+
+Automated focus tests run from `curio-py/` with
+`uv run pytest tests -k focus_session`. Manual acceptance still needs a
+real foreground-app/title switch, false-alarm correction, break/return, spoken
+card response, audible TTS, pet reactions, end/history/delete, restart and
+shutdown on Windows, plus live-model and packaged-startup checks. See
+[focus-session.md](focus-session.md) for the implementation contract.
+
 ## Hackathon preflight and evidence
 
 See [readiness register](hackathon-readiness.md),

@@ -171,6 +171,74 @@ class UiSettings:
         return cls(spotlight=spotlight, spotlight_dim=float(dim))
 
 
+_CLOCK_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+ALLOWED_BREAK_STYLES = {"fixed", "self_paced", "none"}
+
+
+@dataclass(frozen=True)
+class FocusSettings:
+    """``[focus]``: focus/study sessions (docs/focus-learning-research.md)."""
+
+    enabled: bool = True
+    study_minutes: int = 25
+    break_minutes: int = 5
+    break_style: str = "fixed"  # default in the start panel; the learner can change it
+    strict: bool = False  # default in the start panel; never blocks anything
+    max_check_ins_per_hour: int = 3
+    snooze_minutes: int = 10
+    # (start, end) "HH:MM" pairs in local time; may wrap midnight.
+    quiet_hours: tuple[tuple[str, str], ...] = ()
+    # Ask the model about window titles the rules can't judge. Off = rules and
+    # your own corrections only, and no window title ever leaves the device.
+    model_judgments: bool = True
+    sample_seconds: float = 2.0
+    drift_after_seconds: float = 90.0
+
+    @classmethod
+    def from_dict(cls, data: object) -> FocusSettings:
+        if not isinstance(data, dict):
+            raise ConfigError("[focus] must be a table")
+        defaults = cls()
+        values: dict[str, object] = {}
+        for key in ("enabled", "strict", "model_judgments"):
+            value = data.get(key, getattr(defaults, key))
+            if not isinstance(value, bool):
+                raise ConfigError(f"focus.{key} must be a boolean")
+            values[key] = value
+        for key, low, high in (
+            ("study_minutes", 5, 180),
+            ("break_minutes", 1, 60),
+            ("max_check_ins_per_hour", 0, 20),
+            ("snooze_minutes", 1, 240),
+        ):
+            value = data.get(key, getattr(defaults, key))
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise ConfigError(f"focus.{key} must be a whole number from {low} to {high}")
+            values[key] = value
+        for key, low, high in (("sample_seconds", 1.0, 30.0), ("drift_after_seconds", 15, 900)):
+            value = data.get(key, getattr(defaults, key))
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (
+                low <= value <= high
+            ):
+                raise ConfigError(f"focus.{key} must be a number from {low} to {high}")
+            values[key] = float(value)
+        style = data.get("break_style", defaults.break_style)
+        if style not in ALLOWED_BREAK_STYLES:
+            raise ConfigError(
+                f"focus.break_style must be one of {sorted(ALLOWED_BREAK_STYLES)}, got {style!r}"
+            )
+        values["break_style"] = style
+        quiet = data.get("quiet_hours", [])
+        if not isinstance(quiet, list) or not all(
+            isinstance(pair, list) and len(pair) == 2
+            and all(isinstance(t, str) and _CLOCK_RE.match(t) for t in pair)
+            for pair in quiet
+        ):
+            raise ConfigError('focus.quiet_hours must be a list like [["22:00", "07:00"]]')
+        values["quiet_hours"] = tuple((start, end) for start, end in quiet)
+        return cls(**values)
+
+
 def save_share_walkthroughs(path: Path, enabled: bool) -> None:
     """Change only ``[learning] share_walkthroughs``, keeping comments and other settings.
 
@@ -226,6 +294,7 @@ class Config:
     memory: MemorySettings = field(default_factory=MemorySettings)
     learning: LearningSettings = field(default_factory=LearningSettings)
     ui: UiSettings = field(default_factory=UiSettings)
+    focus: FocusSettings = field(default_factory=FocusSettings)
 
     @property
     def point_coords(self) -> str:
@@ -301,6 +370,7 @@ class Config:
             raise ConfigError(str(exc)) from exc
         learning = LearningSettings.from_dict(data.get("learning", {}))
         ui = UiSettings.from_dict(data.get("ui", {}))
+        focus = FocusSettings.from_dict(data.get("focus", {}))
 
         return cls(
             worker_url=worker_url if isinstance(worker_url, str) else "",
@@ -314,6 +384,7 @@ class Config:
             memory=memory,
             learning=learning,
             ui=ui,
+            focus=focus,
         )
 
     @staticmethod

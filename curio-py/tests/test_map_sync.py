@@ -167,6 +167,15 @@ def test_http_rate_limit(tmp_path):
         srv.server_close()
 
 
+@pytest.mark.parametrize("size", [0, 2, MAX_BODY_BYTES + 1])
+def test_unknown_post_returns_404_without_resetting_connection(server, size):
+    with httpx.Client(base_url=server.url) as client:
+        response = client.post("/v1/nowhere", content=b"x" * size)
+        assert response.status_code == 404
+        assert response.json() == {"error": "not found"}
+        assert client.get("/v1/stats").json()["walkthroughs"] == 0
+
+
 def test_store_persists_atomically(tmp_path):
     path = tmp_path / "data" / "map.json"
     store = MapStore(path)

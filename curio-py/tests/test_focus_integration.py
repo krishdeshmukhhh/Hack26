@@ -16,12 +16,16 @@ from curio import hotkey
 from curio.click_watcher import ClickWatcher
 from curio.config import LocalConfig
 from curio.focus_selection import FocusSelectionController
+from curio.focus_session import build_plan
 from curio.hotkey import HotkeyMonitor
 from curio.screen_capture import ScreenshotImage
 from curio.state import VoiceState
 from curio.ui import focus_overlay, target_ring
 from curio.ui.companion_widget import CompanionWidget
 from curio.ui.pet_widget import PetCompanionWidget
+from tests.test_focus_session_fakes import T0, Clock, close, drain
+from tests.test_focus_session_integration import DIRECTIVE_PREFIX, NO_TAGS, PLAN, _session
+from tests.test_streamed_speech import DeltaLLM, StreamingTTS
 from tests.test_walkthrough import _ask, _manager, _settle
 
 
@@ -221,6 +225,75 @@ def test_fresh_focused_requests_snapshot_and_point_mapping(
         await _settle(manager)
         assert manager._current_screenshots[0].image_width_px == 60
         assert len(captures) == 3
+
+    asyncio.run(run())
+
+
+def test_study_help_preserves_selected_capture_streaming_and_step_continuations(
+    selection, qt_application, monkeypatch,
+):
+    draw(selection, qt_application)
+
+    async def run():
+        manager, parts = _manager([], monkeypatch)
+        llm = DeltaLLM([
+            "What should this table summarise? [POINT:none]",
+            "Think about which column holds the dates. [POINT:none]",
+            "Open the sort menu at the top. [POINT:20,10:sort] [STEP:1/2] [CONCEPTS:sorting]",
+            "The table is sorted now. [POINT:none]",
+        ])
+        tts = StreamingTTS(parts["tts"])
+        manager._llm, manager._tts = llm, tts
+        llm.delta.connect(manager._on_llm_delta)
+        manager._screen_capture_fn = source
+        manager.attach_focus_selection(selection)
+        clock = Clock()
+        runtime, session_parts, integration = _session(clock)
+        manager.attach_focus(integration)
+        try:
+            runtime.start(build_plan(**PLAN, now=T0))
+            await drain(runtime)
+            for question in (
+                "how do i sort by date", "just tell me the answer",
+                "i'm still stuck, how do i sort by date",
+            ):
+                _ask(manager, question)
+                await _settle(manager)
+                clock.advance(60)
+
+            texts = [request[-1]["content"][-1]["text"] for request in llm.requests]
+            assert all(DIRECTIVE_PREFIX in text for text in texts)
+            assert all(NO_TAGS in text and "[STEP:1/N]" not in text for text in texts[:2])
+            assert "[STEP:1/N]" in texts[2]
+            assert manager._state == VoiceState.GUIDING
+            assert parts["overlays"].flights[-1][:2] == (-59, -40)
+            assert session_parts["policy"].context[-1]["where"] == "step 1"
+            assert runtime.summary().concepts_practised == ("sorting",)
+
+            parts["clicks"].clicked.emit()
+            await _settle(manager)
+            continuation = llm.requests[-1][-1]["content"][-1]["text"]
+            assert continuation.startswith("i did step 1. what's next?")
+            assert DIRECTIVE_PREFIX not in continuation
+            assert manager._state == VoiceState.IDLE
+            assert len(llm.requests) == 4
+            for request in llm.requests:
+                blocks = request[-1]["content"]
+                assert any("selected focus area" in block.get("text", "") for block in blocks)
+                image = next(block for block in blocks if block["type"] == "image")
+                with Image.open(io.BytesIO(base64.b64decode(image["source"]["data"]))) as shot:
+                    assert shot.size == (30, 20)
+            assert tts.chunks == [
+                "What should this table summarise?",
+                "Think about which column holds the dates.",
+                "Open the sort menu at the top.",
+                "The table is sorted now.",
+            ]
+            assert all(DIRECTIVE_PREFIX not in user for user, _ in manager._history._turns)
+        finally:
+            manager.attach_focus(None)
+            await manager.aclose()
+            await close(runtime, session_parts)
 
     asyncio.run(run())
 
