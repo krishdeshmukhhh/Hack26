@@ -379,3 +379,75 @@ Verification on Windows / Python 3.12.15:
 Do not mark the memory release complete until the Windows/live-provider checklist
 in RUNNING.md is performed and the available changes are reviewed/committed in a
 Git-writable checkout. See memory-integration.md for remaining limitations.
+
+## Hands-free activation - 2026-10-24
+
+Implemented on `feature/hands-free-mode`, without creating a commit.
+
+- Local-backend tray toggle (off by default, persisted through QSettings): say
+  "Hey Curio" or "Okay Curio", wait for the waveform, then ask. About 1.2
+  seconds of quiet submits through the existing voice/screenshot/POINT pipeline.
+- Chose native Windows SAPI command recognition using the existing comtypes
+  dependency: no API fees, new packages, model downloads or wake-model training.
+  Native initialization and recognition run on a dedicated COM thread.
+- Wake recognition is suspended during recording, transcription, inference and
+  playback. Its thread waits without polling while suspended; the endpoint timer
+  also stops during processing/playback. There is an 800 ms return cooldown.
+- Standby audio never enters the app's PCM queue, Whisper, storage or provider
+  requests. Recording has five-second no-question and 30-second maximum bounds.
+  Cancelled hands-free audio is discarded without running Whisper. Ctrl+Alt
+  takes over; Esc cancels a hands-free recording. Late worker events are ignored
+  after disabling/re-enabling. Shutdown joins native workers and closes the mic.
+- Found and resolved real Windows COM differences: explicit optional grammar
+  arguments, explicit outgoing event interface, and a native message pump rather
+  than comtypes.PumpEvents alone. Default Windows audio input is used.
+- Verification: **309 tests pass; 3 native tests skip by default**. All changed
+  Python files pass scoped Ruff; repository-wide Ruff retains its 23 existing
+  findings in unrelated files. The three opt-in native checks pass separately:
+  grammar/emulated wake events, real worker lifecycle/CPU reporting, and acoustic
+  recognition of an offline-generated "Hey Curio" WAV. A normal hands-free turn
+  through local transcription, mocked model/TTS and POINT is regression-tested.
+- Limits: this version needs a pause between wake phrase and question, uses a
+  simple RMS endpoint detector, and does not offer voice interruption during
+  playback. Cloud mode remains push-to-talk due to its existing streaming-turn
+  issue. Real-person microphone accuracy, noisy-room behavior, live-model latency,
+  tray restart behavior and packaged-executable acceptance still need desktop
+  verification. Small background CPU cost is expected; zero overhead is not
+  claimed. See RUNNING.md for usage, opt-in checks and troubleshooting.
+
+### Hands-free microphone fix
+
+Investigated a checked toggle with no reaction on the running Windows desktop.
+Reproduced the fault: `AudioInput=None` left in-process SAPI without initialized
+input and its live stream stayed at zero bytes. Earlier emulated and WAV-input
+tests bypassed that path. The native stream-progress test failed before the fix
+and passed after explicitly binding the Realtek microphone token.
+
+Wake input now matches the app's PortAudio device name, accepts truncated names,
+uses the sole token when unambiguous, and fails visibly on ambiguous multi-device
+selection. Added readiness/device/activation logging without ambient transcript
+logging. Verification: **314 tests pass, 4 optional native checks pass separately**;
+scoped Ruff and diff whitespace checks pass. Native process CPU sample: about
+2.6% of one logical core listening and below the measurement resolution while
+suspended over three-second windows; these are not end-to-end latency results.
+
+### Background conversations and explicit submission
+
+Replaced RMS-only question endpoint evidence with the Silero speech detector
+already bundled with faster-whisper. A dedicated worker analyzes a coalesced,
+one-second PCM window only during hands-free capture; no new packages or model
+downloads. Loud synthetic noise/hum is rejected and generated speech retained.
+Measured about 2 ms per 100 ms analysis window on this host, outside the GUI thread.
+
+Background voices remain genuine speech to a VAD. Added capture-only native
+"Curio send" / "Curio done" / "Curio finish" and "Curio cancel" commands.
+They end recording without waiting for background voices to become quiet; command
+cues are removed from submitted transcripts. Wake and finish grammars are mutually
+exclusive, and stale detector/command events cannot affect a later recording.
+Native recognition and speech analysis remain suspended during model/TTS work.
+
+Integrated origin/main at `integration snapshot` (tutorial coaching, live tutoring and file
+uploads) into the hands-free feature branch, preserving both startup and shutdown
+paths. Combined automated suite: **424 passed**, with native checks opt-in.
+Scoped audio lint passes. The combined build is intended for physical user testing
+before the final merge back into main.

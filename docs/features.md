@@ -236,3 +236,17 @@ is a partial P4 milestone, not completion of the P4 release gate above.
   exact provider token accounting and packaged-app persistence verification.
 - [ ] Integration merge/commit in a writable Git checkout; full repository lint
   remains blocked by 23 pre-existing violations in unchanged files.
+
+### Hands-free integration status - 2026-10-24
+
+- [x] Local-only "Hey Curio" / "Okay Curio" wake activation using native Windows
+  speech recognition, without new service accounts or Python packages.
+- [x] Persisted tray opt-in, automatic silence submission, bounded capture,
+  cancellation, Ctrl+Alt takeover, error recovery and response-time suspension.
+- [x] Bundled Silero VAD for non-speech noise and explicit "Curio send" / "Curio
+  cancel" commands while recording; background voices require the explicit cue.
+- [x] Automated local-turn regression plus native emulated and synthesized-audio
+  wake recognition checks; standby audio excluded from the application PCM queue.
+- [ ] Real-person/noisy-room wake accuracy, full live-model latency, persisted tray
+  toggle on desktop restart and frozen-app verification. Continuous wake+question
+  sentences and voice interruption during playback remain future enhancements.

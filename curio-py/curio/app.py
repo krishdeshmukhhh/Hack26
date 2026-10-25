@@ -31,6 +31,7 @@ from curio.clients.whisper_transcription_client import WhisperTranscriptionClien
 from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.companion_manager import CompanionManager
 from curio.config import Config, ConfigError, save_share_walkthroughs
+from curio.hands_free import HandsFreeController
 from curio.hotkey import HotkeyMonitor
 from curio.learning_events import (
     FallbackDifficulty,
@@ -168,6 +169,7 @@ def run() -> int:
         logger.warning("config error: %s", result.config_error)
 
     tray_icon = TrayIcon()
+    tray_icon.set_hands_free_available(False)
     companion = PetCompanionWidget(settings=result.config.pet if result.config else PetSettings())
     tray_icon.set_selected_pet(companion.settings.species)
     tray_icon.set_learning_available(False)  # enabled once learning is built
@@ -212,6 +214,7 @@ def run() -> int:
     memory_window = None
     learning = None
     skills_window = None
+    hands_free = None
     coaching_runtime = None
     coaching_window = None
     if result.config is not None:
@@ -276,6 +279,13 @@ def run() -> int:
             memory=memory_runtime.conversation,
             learning=learning,
         )
+        if local is not None:
+            hands_free = HandsFreeController(manager, mic, hotkey_monitor)
+            tray_icon.set_hands_free_available(True)
+            tray_icon.hands_free_toggled.connect(hands_free.set_enabled)
+            hands_free.enabled_changed.connect(tray_icon.set_hands_free_enabled)
+            hands_free.error.connect(companion.show_error)
+            hands_free.error.connect(lambda msg: logger.warning("hands-free: %s", msg))
 
         capture_lock = asyncio.Lock()
 
@@ -376,6 +386,8 @@ def run() -> int:
     signal.signal(signal.SIGINT, lambda *_: result.app.quit())
 
     with loop:
+        if hands_free is not None:
+            hands_free.set_enabled(tray_icon.hands_free_enabled)
         # Load local models up front so the first question isn't slow.
         if isinstance(transcription, WhisperTranscriptionClient):
             loop.create_task(transcription.preload())
@@ -384,6 +396,9 @@ def run() -> int:
         if learning is not None:
             loop.create_task(learning.start())
         loop.run_forever()
+        if hands_free is not None:
+            hands_free.close()
+        mic.stop()
         if learning is not None:
             if skills_window is not None:
                 skills_window.close()
