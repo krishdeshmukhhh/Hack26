@@ -90,11 +90,17 @@ class OpenAICompatLLMClient(QObject):
     error = Signal(str)
 
     def __init__(
-        self, base_url: str, api_key: str = "", *, parent: QObject | None = None
+        self,
+        base_url: str,
+        api_key: str = "",
+        temperature: float | None = None,
+        *,
+        parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
+        self._temperature = temperature
 
     async def send(
         self,
@@ -111,6 +117,8 @@ class OpenAICompatLLMClient(QObject):
             "stream": True,
             "messages": to_openai_messages(messages, system),
         }
+        if self._temperature is not None:
+            body["temperature"] = self._temperature
         headers = {"authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
         full_text = ""
