@@ -1,5 +1,63 @@
 # Running Curio
 
+## Tutorial URL coach and live integral tutor
+
+Launch from `curio-py` with `.venv\Scripts\python.exe -m curio` as before.
+Existing backend settings apply. Local model questions, plan generation and
+recognition still require the local server/tunnel. Typed exact-math checking and
+built-in hints do not require a model connection.
+
+Choose **Tutorial URL coach** or **Live integral tutor** from the tray. The window
+selector/status shows which mode receives Ctrl+Alt speech. Mode changes interrupt
+old work and pause an active tutorial; Resume continues its navigation. Stop,
+Escape, closing the shared window or **Return to ordinary assistant** restores
+normal assistance. The shared window can be reopened without restarting the app.
+
+URL flow: paste a public HTML tutorial URL, Preview plan, review/edit the source-
+attributed steps, then Start. Ask by voice or text. **That didn't work** requests
+recovery advice. **Check screen (share now)** authorizes capture/submission to the
+configured vision provider. **I completed it** is user confirmation; Skip is a
+skip. Model screen suggestions are not independent verification. For videos,
+paste an actual permitted transcript. No automatic video download/transcription,
+authenticated pages, JavaScript rendering, remote PDF URLs or paywall bypass is bundled.
+
+For a local document, choose **Choose tutorial file and preview...** beside the
+URL controls. TXT, Markdown, HTML and text-based PDF are supported. The extracted
+text is shared with the configured AI to generate the same reviewable plan;
+references identify the filename and line/block/page. Files are limited to 2 MB,
+60,000 extracted characters, 800 blocks and 100 PDF pages. Scanned PDFs need OCR
+and are unsupported; Word, image and video uploads are not supported. No file is
+copied into persistent memory. No extra PDF dependency is required.
+
+Math flow: enter integrand `2*x*(x^2+1)^2`, click Start problem, then submit:
+
+```text
+u=x^2+1
+du=x*dx
+```
+
+The differential should be incorrect. Request a hint, then correct/continue:
+
+```text
+du=2*x*dx
+I=u^2
+F=u^3/3+C
+F=(x^2+1)^3/3+C
+```
+
+The final answer is verified by exact differentiation. Start related unassisted
+problem offers another problem with in-app coaching disabled; a submitted final
+answer is checked. Guided completion does not establish independent mastery.
+Use explicit `*`. Trig/log/radical/definite integrals, variable denominators,
+LaTeX and implicit multiplication are unsupported. **Capture equation (share
+screen)** sends a screenshot for recognition; review/edit and explicitly confirm
+before assessment. Speech asks questions, never silently submits math steps.
+
+Neither coaching mode automatically creates persistent memories. No additional
+symbolic library is required. Manual checks still needed: real public URLs,
+model/vision/OCR, microphone and audible TTS interruption, tray focus, multiple
+displays, close during pending work and packaged startup. See coaching-integration.md.
+
 Step-by-step guide to running Curio against the lab GPU server, from a
 cold start. For first-time server setup see [`server/README.md`](../server/README.md);
 for how the pieces fit together see [`ARCHITECTURE.md`](ARCHITECTURE.md).
