@@ -31,6 +31,10 @@ Built for Windows developers, creatives, and anyone learning unfamiliar software
 - **Knowledge base injection** — curated markdown docs loaded per-app based on active window, so Claude gives authoritative answers for niche software
 - **Conversation memory** — 10-exchange history so follow-up questions have full context
 - **Interrupt support** — press Ctrl+Alt mid-response to cut the audio and ask something new
+- **Optional hands-free activation** — enable “Hey Curio” in the tray with the local backend;
+  wait for the waveform, ask your question, and pause or say “Curio, send” to submit.
+  Use the explicit send cue when a TV or other people are talking. Native Windows wake
+  recognition requires no new package or service. See [setup and limits](docs/RUNNING.md#hands-free-mode-local-backend).
 - **History window** — optional scrollable transcript accessible from the tray menu
 
 ## Prerequisites

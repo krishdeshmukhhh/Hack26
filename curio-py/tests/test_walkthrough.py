@@ -17,6 +17,7 @@ from curio.state import VoiceState
 class FakeMic(QObject):
     audio_level = Signal(float)
     pcm_chunk = Signal(object)
+    error = Signal(str)
 
     def start(self) -> None: ...
     def stop(self) -> None: ...

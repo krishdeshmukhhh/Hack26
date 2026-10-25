@@ -33,6 +33,7 @@ from curio.clients.whisper_transcription_client import WhisperTranscriptionClien
 from curio.coaching_runtime import CoachingMode, CoachingRuntime
 from curio.config import Config
 from curio.conversation_history import ConversationHistory
+from curio.hands_free import strip_finish_command
 from curio.hotkey import HotkeyMonitor
 from curio.knowledge_base import load_kb_from_disk, match_app, select_content
 from curio.memory_conversation import ConversationMemory
@@ -136,6 +137,8 @@ class CompanionManager(QObject):
         self._current_screenshots: list[ScreenshotImage] = []
         self._speak_task: asyncio.Task[None] | None = None
         self._generation = 0
+        self._hands_free_recording = False
+        self._strip_hands_free_command = False
 
         # Guided walkthrough: the step the user is currently doing, if any.
         self._walkthrough: StepTag | None = None
@@ -237,6 +240,8 @@ class CompanionManager(QObject):
     # ------------------------------------------------------------------
 
     def _on_pcm_chunk(self, chunk: QByteArray) -> None:
+        if self._state != VoiceState.LISTENING:
+            return
         self._pcm["deque"].append(chunk)
         self._pcm["event"].set()
 
@@ -283,6 +288,8 @@ class CompanionManager(QObject):
 
     def _on_hotkey_pressed(self) -> None:
         logger.debug("hotkey pressed (state=%s)", self._state)
+        self._hands_free_recording = False
+        self._strip_hands_free_command = False
 
         self._generation += 1
         if self._coaching is not None:
@@ -311,6 +318,8 @@ class CompanionManager(QObject):
         )
 
     def _on_hotkey_released(self) -> None:
+        if self._hands_free_recording:
+            return
         logger.debug("hotkey released")
         self._set_state(VoiceState.PROCESSING)
         self._mic.stop()
@@ -319,6 +328,8 @@ class CompanionManager(QObject):
 
     def _on_hotkey_cancelled(self) -> None:
         logger.debug("hotkey cancelled")
+        hands_free = self._hands_free_recording
+        self._hands_free_recording = False
         self._generation += 1
         if self._coaching is not None:
             self._coaching.interrupt()
@@ -332,16 +343,39 @@ class CompanionManager(QObject):
             self._current_task.cancel()
         self._mic.stop()
         self._stop_pcm_bridge()
-        asyncio.ensure_future(self._transcription.stop_stream())
+        if hands_free and isinstance(self._transcription, WhisperTranscriptionClient):
+            self._transcription.cancel_stream()
+        else:
+            asyncio.ensure_future(self._transcription.stop_stream())
         # Transition to IDLE directly — the transcription client may not
         # emit a final_transcript if the session never fully started.
         self._set_state(VoiceState.IDLE)
+
+    def begin_hands_free(self) -> None:
+        """Start the same recording pipeline as push-to-talk, without a key."""
+        if self._state not in (VoiceState.IDLE, VoiceState.GUIDING):
+            return
+        self._on_hotkey_pressed()
+        self._hands_free_recording = True
+
+    def finish_hands_free(self, *, strip_command: bool = False) -> None:
+        if self._hands_free_recording and self._state == VoiceState.LISTENING:
+            self._strip_hands_free_command = strip_command
+            self._hands_free_recording = False
+            self._on_hotkey_released()
+
+    def cancel_hands_free(self) -> None:
+        if self._hands_free_recording:
+            self._on_hotkey_cancelled()
 
     # ------------------------------------------------------------------
     # Transcription handler
     # ------------------------------------------------------------------
 
     def _on_final_transcript(self, text: str) -> None:
+        if self._strip_hands_free_command:
+            text = strip_finish_command(text)
+            self._strip_hands_free_command = False
         if self._state == VoiceState.IDLE:
             # The press was cancelled (or errored) before this transcript
             # arrived — don't start a turn nobody asked for.
