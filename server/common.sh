@@ -1,12 +1,13 @@
 # Shared helpers for the Curio server scripts. Sourced, not run.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ ! -f "$HERE/curio.env" ]]; then
+ENV_FILE="$HERE/curio.env"
+if [[ ! -f "$ENV_FILE" ]]; then
     echo "missing $HERE/curio.env - copy curio.env.example and edit it" >&2
     exit 2
 fi
 # shellcheck source=/dev/null
-source "$HERE/curio.env"
+source "$ENV_FILE"
 
 LOG_DIR="$WORK_DIR/logs"
 API_KEY_FILE="$WORK_DIR/api_key"

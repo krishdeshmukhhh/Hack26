@@ -1,11 +1,16 @@
-"""Bounded conversation history for screen-aware voice turns."""
+"""In-memory conversation history for the Claude client.
+
+Keeps a capped list of (user_transcript, assistant_text) tuples. Composes
+Claude message arrays where prior turns are text-only and only the current
+turn carries JPEG images, which controls token cost.
+"""
 
 from __future__ import annotations
 
 from collections import deque
 from typing import Any
 
-# The macOS app keeps the last 10 exchanges.
+# Keep the last 10 exchanges.
 MAX_TURNS = 10
 
 

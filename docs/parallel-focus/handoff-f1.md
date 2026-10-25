@@ -50,7 +50,7 @@ RuleFirstClassifier(
     clock: Callable[[], datetime] | None = None,
     distractions: tuple[str, ...] = DISTRACTIONS,
     reference_sites: tuple[str, ...] = REFERENCE_SITES,
-    own_apps: tuple[str, ...] = ("curio", "curio"),
+    own_apps: tuple[str, ...] = ("curio",),
 )
 
 # DriftTracker

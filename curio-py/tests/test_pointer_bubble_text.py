@@ -3,7 +3,7 @@
 from curio.ui.pointer_bubble import POINTER_PHRASES, friendly_error, random_pointer_phrase
 
 
-def test_pointer_phrases_match_macos() -> None:
+def test_pointer_phrases() -> None:
     assert POINTER_PHRASES == (
         "right here!", "this one!", "over here!", "click this!", "here it is!", "found it!",
     )

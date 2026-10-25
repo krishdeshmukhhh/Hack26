@@ -1,7 +1,7 @@
 # Curio
 
+Curio — Windows voice tutor (HackOhio 2026): hold Ctrl+Alt, ask a question, and a companion next to your cursor answers out loud and points at things on screen. Runs fully locally.
 
-Windows voice tutor with a desktop companion, screen guidance and configurable speech/model providers.
 ## Stack and folders
 - `curio-py/` — the desktop app (**frontend**). Python 3.12, PySide6/Qt, qasync, httpx, uv. Whisper (faster-whisper) and Kokoro TTS run on the laptop. Tests in `curio-py/tests/` (pytest).
 - `server/` — **backend**: bash/Python scripts to run vLLM (Qwen3-VL-30B-A3B-Instruct-FP8) on a shared OSU lab GPU, reached over an SSH tunnel at `http://localhost:8000/v1`.

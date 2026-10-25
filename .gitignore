@@ -16,3 +16,6 @@ coding-plans/
 .worktrees/
 
 curio-py/eval_results/
+
+__pycache__/
+*.pyc

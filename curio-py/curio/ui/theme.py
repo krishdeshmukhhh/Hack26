@@ -5,7 +5,7 @@ Defined once here so the pieces read as a single family in a screen recording.
 
 from __future__ import annotations
 
-ACCENT = "#3380FF"  # DS.Colors.overlayCursorBlue in the Swift app
+ACCENT = "#3380FF"  # DS.Colors.overlayCursorBlue
 ERROR_RED = "#E5484D"
 
 RING_WIDTH = 2.5        # px; target ring, spotlight ring and check flourish strokes

@@ -1,6 +1,6 @@
 """Design system tokens for Curio.
 
-Ported from leanring-buddy/DesignSystem.swift. Only the tokens our widgets
+Only the tokens our widgets
 actually reference are included — not a blanket copy.
 """
 

@@ -1,4 +1,4 @@
-"""Small speech pill shown next to the companion, as in macOS Curio.
+"""Small speech pill shown next to the companion.
 
 Used for the pointer phrase when the companion lands on something ("right
 here!"), the launch greeting ("hey! i'm curio"), and short error notes.
@@ -20,7 +20,7 @@ from curio.ui.theme import ACCENT, CORNER_RADIUS, GLOW_ALPHA, RIM_WIDTH
 from curio.ui.theme import ERROR_RED as ERROR_RED  # re-exported for the companions
 from curio.ui.window_effects import make_overlay_window
 
-CURSOR_BLUE = ACCENT  # DS.Colors.overlayCursorBlue in the Swift app
+CURSOR_BLUE = ACCENT  # DS.Colors.overlayCursorBlue
 
 POINTER_PHRASES = (
     "right here!",

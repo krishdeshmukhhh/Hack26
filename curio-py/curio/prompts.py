@@ -1,4 +1,13 @@
-"""Instructions and response formatting for the desktop assistant."""
+"""System prompts for Curio.
+
+Voice and style rules for the companion's spoken replies.
+Element-pointing section added in v2.1 — the companion can now fly to UI
+elements via [POINT:x,y:label] tags parsed from Claude's response.
+
+Examples target Windows apps
+(DaVinci Resolve, Blender, VS Code) matching the target "Windows learner new
+to a tool" persona.
+"""
 
 import re
 

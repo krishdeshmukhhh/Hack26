@@ -107,7 +107,7 @@ class PetCompanionWidget(CompanionWidget):
                 self.controller.set_state(str(state))
 
     def text_started(self, _text=""):
-        # Answers stream while the spinner shows (PROCESSING), as on macOS.
+        # Answers stream while the spinner shows (PROCESSING).
         if self._state in (VoiceState.PROCESSING, VoiceState.RESPONDING):
             self.controller.text_started()
 
@@ -142,7 +142,7 @@ class PetCompanionWidget(CompanionWidget):
         # The marker is at the exact target; the sprite sits beside it.
         self._point_target = (x - 8, y - self.PET_SIZE // 2)
         self.controller.point_to(self._point_target)
-        # macOS-style pointer pill beside the target. It fades when the pet's
+        # Pointer pill beside the target. It fades when the pet's
         # visit ends; walkthrough steps keep both until released.
         caption = step_caption(random_pointer_phrase(), step)
         # The sprite covers the target area, so put the pill just right of it.

@@ -2,7 +2,7 @@
 
 **A voice-powered AI tutor for Windows that watches your screen, answers your questions, and points at what it's talking about.**
 
-Curio is a Windows desktop assistant for voice questions and on-screen guidance.
+Curio is an AI tutor that lives next to your cursor. Hold Ctrl+Alt to talk, release to get a spoken answer from Claude. The companion cursor flies to UI elements it references, so you always know exactly what it's describing.
 
 Built for Windows developers, creatives, and anyone learning unfamiliar software by doing instead of watching tutorials.
 
@@ -55,7 +55,7 @@ Built for Windows developers, creatives, and anyone learning unfamiliar software
 
 ```bash
 git clone https://github.com/krishdeshmukhhh/Hack26.git
-cd curio/curio-py
+cd Hack26/curio-py
 uv sync
 ```
 

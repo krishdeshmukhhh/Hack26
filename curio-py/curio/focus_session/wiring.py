@@ -41,7 +41,7 @@ from curio.study_coach import EvidenceBasedCoach, SqliteReviewScheduler, generat
 logger = logging.getLogger(__name__)
 
 # Foreground "apps" that mean the learner clicked the tray, not their work.
-_NOT_WORK_APPS = {"", "explorer", "curio", "curio", "shellexperiencehost"}
+_NOT_WORK_APPS = {"", "explorer", "curio", "shellexperiencehost"}
 
 
 def _utc_now() -> datetime:

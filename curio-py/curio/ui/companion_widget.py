@@ -1,4 +1,4 @@
-"""Cursor-following companion overlay, matching macOS Curio's behaviour.
+"""Cursor-following companion overlay.
 
 - Idle / responding: a blue triangle beside the cursor, with a soft glow.
 - Listening: five reactive waveform bars replace the triangle.
@@ -87,11 +87,11 @@ class CompanionWidget(QWidget):
     ERROR_FLASH_MS = 1000
     TRANSIENT_HIDE_DELAY_MS = 1000
 
-    # Listening waveform (macOS BlueCursorWaveformView).
+    # Listening waveform.
     WAVE_PROFILE = (0.4, 0.7, 1.0, 0.7, 0.4)
     WAVE_BAR_WIDTH = 2.5
     WAVE_BAR_GAP = 2.0
-    # Our mic level is RMS (speech ~0.01-0.1); the Swift formula expects a
+    # Our mic level is RMS (speech ~0.01-0.1); the original formula expects a
     # larger power level, so scale it up first.
     WAVE_LEVEL_GAIN = 3.0
 
@@ -525,7 +525,7 @@ class CompanionWidget(QWidget):
             self.move(*pos)
 
     def _bubble_anchor(self) -> QPointF:
-        # macOS: pill's left edge 10 px right of the buddy, centred 18 px below.
+        # Pill's left edge 10 px right of the buddy, centred 18 px below.
         return QPointF(self._center.x() + 10, self._center.y() + 18)
 
     # ------------------------------------------------------------------
@@ -600,7 +600,7 @@ class CompanionWidget(QWidget):
         painter.drawEllipse(c, radius, radius)
 
     def _paint_triangle(self, painter: QPainter, c: QPointF, color: QColor) -> None:
-        # Equilateral, centred on its centroid (the Swift Triangle shape).
+        # Equilateral, centred on its centroid.
         size = self.TRIANGLE_SIZE * self._flight_scale * self._landing.scale
         height = size * math.sqrt(3) / 2
         painter.save()
@@ -636,7 +636,7 @@ class CompanionWidget(QWidget):
             x += self.WAVE_BAR_WIDTH + self.WAVE_BAR_GAP
 
     def _paint_spinner(self, painter: QPainter, c: QPointF, color: QColor) -> None:
-        """A 70% arc (Swift: trim 0.15-0.85) fading from tail to head, one turn per 0.8 s."""
+        """A 70% arc fading from tail to head, one turn per 0.8 s."""
         radius = 7.5
         rect = QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius)
         sweep = 252.0

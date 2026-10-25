@@ -1,5 +1,15 @@
 # Running Curio
 
+> **Upgrading from the previous app name.** The app lives in `curio-py/` and
+> runs with `uv run python -m curio`.
+> - Settings and data now live in `%APPDATA%\Curio` and `%LOCALAPPDATA%\Curio`.
+>   To keep your old config, memory, skills and task maps, quit the app and
+>   copy the contents of the previous app's folders in `%APPDATA%` and
+>   `%LOCALAPPDATA%` into those two folders before the first start.
+> - Run `cd curio-py && uv sync --extra local` once to build the new virtualenv,
+>   then delete the old app folder's `.venv`.
+> - On the lab machine, rename your server env file to `server/curio.env`.
+
 ## Focus a screen area and ask about it
 
 Hold **Ctrl+Alt**, press the **left mouse button**, and drag a box around what

@@ -1,4 +1,26 @@
-"""Microphone capture and audio framing for voice requests."""
+"""Microphone capture via ``sounddevice`` — 16 kHz PCM16 mono, 100 ms chunks.
+
+Opens a WASAPI input stream through PortAudio (via ``sounddevice``) and
+emits raw little-endian int16 PCM bytes plus an RMS audio-level value on
+every block. Consumers (e.g. the transcription uploader and the waveform
+widget) connect to the Qt signals.
+
+Audio config rationale
+----------------------
+Curio's PRD § Question 6a + 6c pins the capture format directly to
+**16 kHz PCM16 mono with 100 ms chunks** (``blocksize=1600``) to match
+what the Deepgram streaming endpoint expects, so no resampler is needed
+on Windows.
+
+Thread safety
+-------------
+sounddevice fires the stream callback on its own audio thread. Qt signal
+emissions from that thread must be marshaled onto the thread this
+``MicCapture`` QObject lives in (normally the main thread) via
+``QMetaObject.invokeMethod`` with ``Qt.ConnectionType.QueuedConnection``.
+This mirrors the pattern used in ``curio/hotkey.py``; the difference is
+that our signals carry payloads, so we use ``Q_ARG`` to pack the args.
+"""
 
 from __future__ import annotations
 

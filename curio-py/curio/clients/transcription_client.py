@@ -15,10 +15,8 @@ This module contains two layers:
    Qt's event loop to asyncio with ``qasync`` (runtime dependency; not imported
    here).
 
-See the Swift reference implementation at
-``leanring-buddy/AssemblyAIStreamingTranscriptionProvider.swift`` for the exact
-URL format, query-parameter names, termination frame protocol, and the
-one-shot reconnect strategy this client mirrors.
+The client implements the AssemblyAI URL format, query-parameter names,
+termination frame protocol, and a one-shot reconnect strategy.
 """
 
 from __future__ import annotations
@@ -35,17 +33,15 @@ from PySide6.QtCore import QByteArray, QObject, Signal
 
 logger = logging.getLogger(__name__)
 
-# AssemblyAI Universal-Streaming v3 endpoint + query params. These match the
-# Swift reference (AssemblyAIStreamingTranscriptionProvider.swift lines 111,
-# 448-465) exactly — sample_rate, encoding, and token are the literal keys the
-# AssemblyAI server expects.
+# AssemblyAI Universal-Streaming v3 endpoint + query params. sample_rate,
+# encoding, and token are the literal keys the AssemblyAI server expects.
 _ASSEMBLYAI_WS_BASE = "wss://streaming.assemblyai.com/v3/ws"
 _SAMPLE_RATE_HZ = 16000
 _ENCODING = "pcm_s16le"
 
 # Graceful drain contract: after sending the Terminate frame we wait up to this
 # many seconds for the server's final Turn message before cancelling the recv
-# loop. The Swift client uses a similarly short bounded wait.
+# loop. Keep it short and bounded.
 _DRAIN_TIMEOUT_SECONDS = 2.0
 
 
@@ -69,8 +65,8 @@ def parse_assemblyai_message(msg: dict) -> TranscriptEvent | None:
     ``None`` for lifecycle/control messages (``Begin``, ``Termination``,
     errors, unknown future types).
 
-    The Swift reference lowercases the type before matching; we mirror that
-    behaviour so any casing variants AssemblyAI sends still parse correctly.
+    The type is lowercased before matching so any casing variants AssemblyAI
+    sends still parse correctly.
     """
     message_type = msg.get("type")
     if not isinstance(message_type, str):
@@ -431,11 +427,9 @@ class TranscriptionClient(QObject):
                     continue
 
                 if event.is_final:
-                    # Dedupe by text equality. Swift's reference dedupes by
-                    # turnOrder (handleTurnMessage + storeTurnTranscript
-                    # around lines 273-330) so each user utterance yields at
-                    # most one committed final. We don't track turn order
-                    # here, but equality on the text payload covers the two
+                    # Dedupe by text equality (turn order is not tracked) so each
+                    # utterance yields at most one committed final.
+                    # Equality on the text payload covers the two
                     # cases we care about: (1) the ``turn_is_formatted``
                     # follow-up message which carries the same text as a
                     # prior ``end_of_turn``, and (2) a mid-stream reconnect

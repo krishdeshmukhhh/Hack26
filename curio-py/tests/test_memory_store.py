@@ -24,7 +24,7 @@ def record(**changes):
     return replace(
         MemoryRecord(
             type=MemoryType.FACT,
-            content="My project is Curio",
+            content="My project is CurioPro",
             source=MemorySource.USER,
         ),
         **changes,
@@ -82,7 +82,7 @@ def test_expiration_filters_search_pagination_and_clear(tmp_path):
             assert await store.search(
                 "concise", filters=MemoryFilter(approval_status=ApprovalStatus.APPROVED)
             ) == (approved,)
-            assert await store.search("Curio") == ()
+            assert await store.search("CurioPro") == ()
             assert await store.search("   ") == ()
             assert await store.list(limit=0) == ()
             assert await store.list(offset=1) == ()
@@ -102,7 +102,7 @@ def test_duplicate_ids_and_content_are_atomic_across_instances(tmp_path):
             )
             assert sum(isinstance(result, ValueError) for result in outcomes) == 1
             with pytest.raises(ValueError):
-                await second.create(record(content="  MY project is CURIO  "))
+                await second.create(record(content="  MY project is CURIOPRO  "))
             other = await second.create(record(content="Another fact"))
             with pytest.raises(ValueError):
                 await first.update(replace(other, content=item.content))

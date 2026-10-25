@@ -52,7 +52,7 @@ class QuestionEndpoint:
 def strip_finish_command(text: str) -> str:
     """Remove an explicit send cue only from a hands-free command-ended turn."""
     return re.sub(
-        r"(?:\s*[,.;!?]\s*|\s+|^)(?:curio|clickie|clickey|clippy)"
+        r"(?:\s*[,.;!?]\s*|\s+|^)(?:curio|kurio|currio|cario)"
         r"\s*[,.:]?\s*(?:send(?:\s+it)?|done|finish)[.!?\s]*$", "", text,
         flags=re.IGNORECASE,
     ).strip()
@@ -90,7 +90,7 @@ def create_wake_grammar(recognizer):
     context.EventInterests = 16  # SRERecognition only
     grammar = context.CreateGrammar(1)
     rule = grammar.Rules.Add("CurioWake", 33, 1)  # top-level | dynamic
-    for phrase in ("hey curio", "hey clickie", "okay curio"):
+    for phrase in ("hey curio", "okay curio"):
         # Explicit optional arguments avoid comtypes' omitted-VARIANT
         # defaults being rejected by Windows SAPI (E_INVALIDARG).
         rule.InitialState.AddWordTransition(None, phrase, " ", 1, "", 0, "", 1.0)

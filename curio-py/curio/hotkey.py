@@ -1,4 +1,38 @@
-"""Global hold-to-talk input monitoring and key release handling."""
+"""Global hotkey monitor — strict modifier-only press/release detection.
+
+Watches the keyboard via ``pynput`` on a background thread and emits
+Qt signals when a configured modifier combination transitions between
+pressed and released. Events carry a chord identity through a queued
+connection so selection can invalidate pending press/release events. Downstream Qt
+slots run on the main thread and can touch widgets safely.
+
+Supported bindings (closed set in v1):
+
+- ``"ctrl+alt"``: armed when (left or right Ctrl) **and** Alt are held
+  **and nothing else** (no Shift, no Win, no letters) is held.
+- ``"right_ctrl"``: armed when **only** right Ctrl is held — no other
+  modifier, no regular key.
+
+State machine (identical for both bindings)::
+
+    UNARMED --(arming condition met on key press)--> ARMED     [emit pressed]
+    ARMED   --(any non-required key pressed)------> CANCELLED  [emit cancelled]
+    ARMED   --(any required modifier released)----> UNARMED    [emit released]
+    CANCELLED --(all modifiers released)----------> UNARMED
+
+After ``CANCELLED`` the monitor does **not** emit ``released`` — the
+press was never a legitimate hotkey press from the user's perspective.
+Once every key is lifted we silently return to ``UNARMED`` so the next
+real Ctrl+Alt chord can fire again.
+
+Strict chord rule
+-----------------
+The hotkey is strict modifier-only with cancel-on-other-key: it does not fire
+when a third modifier (Shift) or a regular key is additionally held, and it
+distinguishes left from right modifiers. Curio's PRD § Question 5c requires
+this so that typing Ctrl+Alt+T (a Windows shortcut) does not accidentally open
+a voice session.
+"""
 
 from __future__ import annotations
 

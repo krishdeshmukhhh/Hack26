@@ -29,7 +29,7 @@ class TrayIcon(QSystemTrayIcon):
     assistant_requested = Signal()
     show_settings_requested = Signal()
     # "Show Curio" toggled. Off hides the cursor except during an interaction,
-    # like the macOS menu bar toggle. Persisted across launches.
+    # as a persisted toggle. Persisted across launches.
     show_cursor_toggled = Signal(bool)
     pet_selected = Signal(str)
     show_skills_requested = Signal()

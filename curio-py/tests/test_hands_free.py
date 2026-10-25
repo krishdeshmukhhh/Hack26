@@ -306,7 +306,7 @@ def test_old_detector_and_command_results_cannot_end_new_recording(setup_control
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("cue", ["Curio, send.", "clickie done", "Clippy finish!"])
+@pytest.mark.parametrize("cue", ["Curio, send.", "kurio done", "Currio finish!"])
 def test_explicit_send_cue_removed_from_transcript(cue):
     assert strip_finish_command("Where is export? " + cue) == "Where is export"
     assert strip_finish_command(cue) == ""

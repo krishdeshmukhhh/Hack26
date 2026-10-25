@@ -1,4 +1,4 @@
-"""Tests for the companion's flight geometry (ported from macOS Curio)."""
+"""Tests for the companion's flight geometry."""
 
 import math
 

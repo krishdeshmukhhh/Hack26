@@ -1177,8 +1177,8 @@ class CompanionManager(QObject):
                 if generation != self._generation:
                     return
 
-                # Stay in PROCESSING (spinner) while the model answers, as the
-                # macOS app does; RESPONDING starts when there's something to say.
+                # Stay in PROCESSING (spinner) while the model answers; RESPONDING
+                # starts when there's something to say.
                 # If the TTS client can stream, start speaking finished
                 # sentences while the rest of the answer is still arriving.
                 if hasattr(self._tts, "speak_stream"):
@@ -1225,7 +1225,7 @@ class CompanionManager(QObject):
                     without_step, step = parse_step_tag(full_text)
                     without_concepts, concepts = parse_concepts_tag(without_step)
                     spoken_text, point_tag = parse_point_tag(without_concepts)
-                # Store the answer without tags, like the macOS app, so old
+                # Store the answer without tags, so old
                 # coordinates don't confuse later turns.
                 self._history.append(text, spoken_text)
                 self._set_state(VoiceState.RESPONDING)

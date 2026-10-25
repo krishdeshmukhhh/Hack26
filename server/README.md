@@ -50,6 +50,7 @@ Everything here uses standard tools and needs no sudo.
    git clone https://github.com/krishdeshmukhhh/Hack26.git ~/Hack26
    cd ~/Hack26/server
    cp curio.env.example curio.env    # then edit: ALLOWED_GPUS, paths
+   # Upgrading? Rename your existing env file to curio.env; the paths set in it keep working.
    ```
 
 3. **Create a venv with vLLM ≥ 0.11** (Qwen3-VL needs it). Keep pip's cache

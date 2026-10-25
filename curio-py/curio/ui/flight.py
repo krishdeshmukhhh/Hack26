@@ -1,6 +1,6 @@
-"""Geometry for the companion's flights, ported from macOS Curio.
+"""Geometry for the companion's flights.
 
-The original flies along a quadratic bezier arc that bows upward, eases in
+The companion flies along a quadratic bezier arc that bows upward, eases in
 and out with smoothstep, turns the triangle to face its direction of travel,
 and swells to 1.3x at the midpoint. Flight time scales with distance.
 These are pure functions so they can be unit-tested without a window.
@@ -12,9 +12,9 @@ import math
 
 Point = tuple[float, float]
 
-# Where the companion sits relative to the mouse cursor (macOS: +35, +25).
+# Where the companion sits relative to the mouse cursor.
 FOLLOW_OFFSET = (35, 25)
-# Land beside the target rather than on top of it (macOS: +8, +12).
+# Land beside the target rather than on top of it.
 LANDING_OFFSET = (8, 12)
 # Triangle angle when not flying: tip up-left like a mouse pointer.
 REST_ROTATION_DEGREES = -35.0

@@ -124,7 +124,7 @@ signals and methods in both backends.
 | `prompts.py` | The system prompt: voice style, POINT-tag rules, coordinate format, knowledge base. |
 | `point_parser.py` / `point_mapper.py` | Parse `[POINT:x,y:label:screenN]` and map it to real screen pixels. |
 | `knowledge_base.py` | Per-app markdown docs chosen by the foreground window title. |
-| `ui/companion_widget.py` | The buddy, matching macOS Curio: triangle (idle/speaking), waveform (listening), spinner (thinking), arc flights, point-and-return, launch greeting, transient show/hide. |
+| `ui/companion_widget.py` | The buddy: triangle (idle/speaking), waveform (listening), spinner (thinking), arc flights, point-and-return, launch greeting, transient show/hide. |
 | `ui/flight.py` | Pure geometry for flights: bezier arc, duration, rotation, scale, follow and landing offsets. |
 | `ui/pointer_bubble.py` | Small blue pill typed out letter by letter ("right here!", "hey! i'm curio"), red for errors. |
 | `ui/window_effects.py` | Win32 setup shared by both overlays (click-through, no Windows 11 border or shadow). |
@@ -297,10 +297,9 @@ off; with the defaults, synthesis was 6–9× slower once other threads were
 busy. Model files download to `%LOCALAPPDATA%\Curio\models\kokoro` on
 first use.
 
-## Matching macOS Curio
+## Pointing overlay
 
-The overlay follows the original's `OverlayWindow.swift` and
-`CompanionManager.swift`:
+How the companion overlay behaves:
 
 | Behaviour | Value |
 |---|---|
@@ -315,10 +314,8 @@ The overlay follows the original's `OverlayWindow.swift` and
 | History | last 10 exchanges, tags stripped |
 | Colour | `#3380FF` |
 
-Deliberate differences: errors show a short red pill (the original speaks a
-canned message), and walkthrough steps hold at the target until clicked.
-The onboarding video, email capture, analytics and permissions panel aren't
-ported.
+Errors show a short red pill, and walkthrough steps hold at the target until
+clicked.
 
 ## Model server
 

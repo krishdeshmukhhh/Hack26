@@ -1,3 +1,5 @@
+# Deploying under this name creates a new workers.dev URL; update worker_url
+# in app configs after the next deploy.
 name = "curio-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
