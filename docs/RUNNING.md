@@ -263,6 +263,83 @@ The original setup (Claude + AssemblyAI + ElevenLabs through a Cloudflare
 Worker) still works with `backend = "cloud"`. It needs three API keys and a
 deployed Worker; see the "Quick start" section of the main [README](../README.md).
 
+## Hands-free mode (local backend)
+
+Restart Curio to load the feature, then enable tray > **Hands-free: "Hey Curio"**.
+It defaults to off; the tray choice persists in Windows QSettings, alongside
+Show Curio. It requires `backend = "local"`, the existing local dependencies,
+a working microphone and an installed Windows English SAPI speech recognizer.
+There is no new Python package, service account, API charge or wake-model download.
+
+1. Say **"Hey Curio"** ("Okay Curio" also works).
+2. Pause until the listening waveform appears, then ask your question.
+3. Stop speaking for about **1.2 seconds** to submit. If people or a TV are
+   talking, say **"Curio, send"** (or "Curio, done") to submit explicitly.
+   Say **"Curio, cancel"** to discard the recording. Curio uses its normal
+   screenshot, model, voice and pointing pipeline.
+
+Ctrl+Alt continues to work and takes over an active hands-free recording.
+Esc cancels that recording. No question within five seconds cancels activation;
+recordings are capped at 30 seconds. Disabling the tray option stops wake
+listening and cancels a hands-free recording, but does not interrupt an answer
+already processing or playing. Voice interruption during playback is not included;
+use Ctrl+Alt instead.
+
+Wake recognition uses a small Windows SAPI command grammar on its own thread.
+Standby audio is processed locally by Windows, never queued for Whisper, saved or
+uploaded by Curio. While recording, the native grammar switches to send/cancel
+commands; the wake phrase is inactive. Native recognition is suspended while
+transcribing, calling the model and speaking. Its worker waits without polling
+while suspended; the endpoint timer also stops during processing/playback. After
+an answer there is an 800 ms cooldown before wake listening resumes. Cancelled
+hands-free audio is discarded without running Whisper. Turning hands-free off
+closes its native recognizer; when never enabled, no wake thread is created.
+
+This version deliberately uses **wake phrase, pause, question**. Speaking the
+whole sentence without a pause can lose the beginning of the question. Endpoint
+detection uses the Silero speech model already bundled with faster-whisper,
+on a background worker with a one-second rolling window and a coalesced queue.
+It runs only during hands-free capture and distinguishes speech from ordinary
+non-speech noise. It cannot identify your voice separately from a TV or another
+speaker: **use "Curio, send" in that environment**, or Ctrl+Alt. Test with
+your actual microphone and environment. Keep
+Windows' default recording device consistent with the microphone used by Curio.
+The wake recognizer explicitly binds a Windows speech input token matching
+Curio's PortAudio input name (including truncated device names). With one
+speech input it uses that device. An ambiguous multi-device match fails visibly.
+If native speech initialization fails, the toggle turns off and an error pill
+explains what to check; push-to-talk remains available. The original cloud
+backend retains push-to-talk because its streaming transcription can end turns
+early during pauses.
+
+Automated checks cover endpoint bounds, cancellation without inference, manual
+takeover, idle PCM exclusion, stale wake events, playback gating and a mocked
+end-to-end local turn with speech and POINT preserved. Optional native checks
+verify the real Windows grammar, emulated and synthesized-audio recognition,
+actual live microphone stream progress, worker shutdown and report process CPU time
+(with Qt harness polling paused
+during the measurement):
+
+```powershell
+$env:CURIO_TEST_SAPI = "1"
+uv run pytest -q -s tests/test_hands_free_native.py
+Remove-Item Env:CURIO_TEST_SAPI
+```
+
+These checks briefly open the local microphone without saving/uploading audio.
+They do not measure real-person wake accuracy or full voice-response latency.
+Before relying on it, test your own pronunciation, quiet/noisy conditions, headset
+and speakers, restart persistence, Ctrl+Alt/Esc, and a packaged executable. CPU
+overhead is small but not guaranteed zero; recognition is suspended during answers
+to keep it out of the existing critical path.
+
+If an older build's toggle is checked but nothing happens, restart Curio to load
+the explicit microphone binding fix. The earlier `AudioInput=None` assignment
+left in-process SAPI without an input on this host; simulated recognition still
+passed despite zero live microphone frames. Logs now record the selected wake
+microphone, recognizer readiness and wake activation, without recording ambient
+speech. The new live-input check catches that failure.
+
 ## Pet settings
 
 Open Settings from the tray and add/edit this top-level table, separate from
