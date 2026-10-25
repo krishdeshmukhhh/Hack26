@@ -16,6 +16,7 @@ may require the application to run at the same integrity level for hooks.
 from __future__ import annotations
 
 import ctypes
+import logging
 import sys
 import threading
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from pynput import keyboard, mouse
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from curio.ui.focus_overlay import DisplayCoordinates, FocusOverlay, display_coordinates
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,7 @@ class FocusSelectionController(QObject):
         self._cancelled = False
         self._generation = 0
         self._active = False
+        self._callback_error_logged = False
         self._event.connect(self._receive, Qt.ConnectionType.QueuedConnection)
 
     @property
@@ -81,9 +85,20 @@ class FocusSelectionController(QObject):
 
         def guarded(callback):
             def invoke(*args):
-                with self._lock:
-                    if self._active and generation == self._generation:
-                        return callback(*args)
+                try:
+                    with self._lock:
+                        if self._active and generation == self._generation:
+                            return callback(*args)
+                except Exception as exc:
+                    # pynput's own control-flow exceptions (stop / suppress_event)
+                    # must reach the listener; anything else must not kill it.
+                    if isinstance(exc, keyboard.Listener.StopException) or (
+                        "Suppress" in type(exc).__name__
+                    ):
+                        raise
+                    if not self._callback_error_logged:
+                        self._callback_error_logged = True
+                        logger.warning("focus selection input callback failed", exc_info=True)
                 return None
 
             return invoke
@@ -146,14 +161,14 @@ class FocusSelectionController(QObject):
     def _post(self, kind: str, *args) -> None:
         self._event.emit((self._generation, kind, args))
 
-    def _on_key_press(self, key) -> None:
+    def _on_key_press(self, key, injected=False) -> None:
         with self._lock:
             self._held.add(key)
             if key == keyboard.Key.esc and self._gesture:
                 self._cancelled = True
                 self._post("cancel")
 
-    def _on_key_release(self, key) -> None:
+    def _on_key_release(self, key, injected=False) -> None:
         with self._lock:
             self._held.discard(key)
 
@@ -165,7 +180,7 @@ class FocusSelectionController(QObject):
             self._held & {keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt_gr}
         )
 
-    def _on_click(self, x, y, button, pressed) -> None:
+    def _on_click(self, x, y, button, pressed, injected=False) -> None:
         if button != mouse.Button.left:
             return
         with self._lock:
@@ -182,7 +197,7 @@ class FocusSelectionController(QObject):
                     self._post("finish", int(x), int(y))
                 self._gesture = self._cancelled = False
 
-    def _on_move(self, x, y) -> None:
+    def _on_move(self, x, y, injected=False) -> None:
         with self._lock:
             if self._gesture and not self._cancelled:
                 self._post("move", int(x), int(y))

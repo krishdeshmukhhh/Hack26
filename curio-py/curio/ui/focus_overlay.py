@@ -96,20 +96,44 @@ def _windows_bounds() -> dict[str, tuple[int, int, int, int]]:
     return result
 
 
+def _match_native_bounds(screen, bounds: dict, used: set) -> tuple | None:
+    """Native bounds for a QScreen: by device name, else by size/origin.
+
+    Qt 6 on Windows may name screens by monitor model (e.g. "N160JME_GE1") while the
+    native enumeration is keyed by device name (DISPLAY1), so names alone can miss.
+    """
+    physical = bounds.get(screen.name().casefold())
+    if physical is not None:
+        return physical
+    logical = screen.geometry()
+    ratio = screen.devicePixelRatio()
+    size = (round(logical.width() * ratio), round(logical.height() * ratio))
+    candidates = [
+        b for key, b in bounds.items() if key not in used and (b[2], b[3]) == size
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda b: abs(b[0] - logical.x() * ratio) + abs(b[1] - logical.y() * ratio),
+    )
+
+
 def display_coordinates() -> list[DisplayCoordinates]:
     """Called on the Qt thread. Windows origins come from native monitor metadata."""
     bounds = _windows_bounds() if sys.platform == "win32" else {}
+    used: set = set()
     displays = []
     for screen in QGuiApplication.screens():
         logical = screen.geometry()
-        physical = bounds.get(screen.name().casefold())
-        if physical is None:
-            if sys.platform == "win32" and QGuiApplication.platformName() != "offscreen":
-                continue  # Never guess physical origins on mixed-DPI Windows desktops.
+        physical = _match_native_bounds(screen, bounds, used)
+        if physical is not None:
+            used.update(k for k, b in bounds.items() if b == physical)
+        else:
             ratio = screen.devicePixelRatio()
             physical = (
-                logical.x(),
-                logical.y(),
+                round(logical.x() * ratio),
+                round(logical.y() * ratio),
                 round(logical.width() * ratio),
                 round(logical.height() * ratio),
             )

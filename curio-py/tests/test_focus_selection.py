@@ -310,3 +310,58 @@ def test_start_failure_cleans_both_listeners(app, monkeypatch):
     assert c._mouse_listener is c._keyboard_listener is None
     ml.stop.assert_called_once()
     kl.stop.assert_called_once()
+
+
+def test_display_matching_falls_back_to_size_when_qt_names_by_model(app, monkeypatch):
+    from curio.ui import focus_overlay
+
+    screen = SimpleNamespace(
+        name=lambda: "N160JME_GE1",
+        geometry=lambda: QRect(0, 0, 1920, 1200),
+        devicePixelRatio=lambda: 1.0,
+    )
+    monkeypatch.setattr(focus_overlay.sys, "platform", "win32")
+    monkeypatch.setattr(
+        focus_overlay, "_windows_bounds", lambda: {r"\.\display1": (0, 0, 1920, 1200)}
+    )
+    monkeypatch.setattr(focus_overlay.QGuiApplication, "screens", lambda: [screen])
+    assert focus_overlay.display_coordinates()[0].physical == (0, 0, 1920, 1200)
+    target, point = focus_overlay.logical_target(1094, 1164)
+    assert target is screen and (point.x(), point.y()) == (1094, 1164)
+
+
+def test_keyboard_callbacks_accept_pynput_injected_arg_and_never_raise(app, monkeypatch):
+    kl = Mock()
+    monkeypatch.setattr("curio.focus_selection.mouse.Listener", Mock(return_value=Mock()))
+    kbd = Mock(return_value=kl)
+    kbd.Key = keyboard.Key
+    kbd.StopException = keyboard.Listener.StopException
+    monkeypatch.setattr("curio.focus_selection.keyboard.Listener", kbd)
+    c = FocusSelectionController()
+    c.start()
+    try:
+        on_press = kbd.call_args.kwargs["on_press"]
+        on_release = kbd.call_args.kwargs["on_release"]
+        on_press(keyboard.Key.ctrl_l, False)
+        on_release(keyboard.Key.ctrl_l, False)
+        assert not c._held
+        c._held = None  # next callback raises TypeError; the guard must swallow it
+        on_press(keyboard.Key.alt_l, False)
+        on_press(keyboard.Key.alt_l, False)
+        c._held = set()
+    finally:
+        c.stop()
+
+
+def test_dpr_fallback_scales_origin_for_non_primary_screen(app, monkeypatch):
+    from curio.ui import focus_overlay
+
+    screen = SimpleNamespace(
+        name=lambda: "X",
+        geometry=lambda: QRect(-1280, 0, 1280, 720),
+        devicePixelRatio=lambda: 1.5,
+    )
+    monkeypatch.setattr(focus_overlay.sys, "platform", "win32")
+    monkeypatch.setattr(focus_overlay, "_windows_bounds", lambda: {})
+    monkeypatch.setattr(focus_overlay.QGuiApplication, "screens", lambda: [screen])
+    assert focus_overlay.display_coordinates()[0].physical == (-1920, 0, 1920, 1080)
