@@ -59,6 +59,11 @@ ReviewGenerator = Callable[[Sequence[str], str], Awaitable[Sequence[ReviewItem]]
 REVIEW_LIMIT = 3
 REVIEW_OFFER_CHOICES = ("start review", "not now")
 SPOKEN_KINDS = frozenset(set(InterventionKind) - {InterventionKind.AMBIENT_CUE})
+# Drift nudges may be reworded by the model (up to the policy's short timeout);
+# planning, break and reflection prompts are shown straight away from templates.
+REPHRASED_KINDS = frozenset(
+    {InterventionKind.CHECK_IN, InterventionKind.PLAN_REMINDER, InterventionKind.RESUME}
+)
 
 
 class Presenter(Protocol):
@@ -417,7 +422,7 @@ class FocusRuntime(QObject):
             spoken = intervention.kind in SPOKEN_KINDS
             if not self.active or (spoken and intervention.id not in self._pending):
                 return
-            if spoken and intervention.id not in self._own_ids():
+            if intervention.kind in REPHRASED_KINDS and intervention.id not in self._own_ids():
                 try:
                     intervention = await self.policy.rephrase(intervention)
                 except Exception:

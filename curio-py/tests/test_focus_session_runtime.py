@@ -329,3 +329,22 @@ def test_cannot_start_twice():
         await close(runtime, p)
 
     asyncio.run(scenario())
+
+
+def test_only_drift_nudges_wait_for_the_model_rephrase():
+    async def scenario():
+        clock = Clock()
+        runtime, p = make_runtime(clock)
+        rephrased = []
+
+        async def rephrase(intervention):
+            rephrased.append(intervention.kind)
+            return intervention
+
+        p["policy"].rephrase = rephrase
+        runtime.start(_plan())
+        await feed(runtime, steps(*DRIFT), clock)
+        assert rephrased == [InterventionKind.CHECK_IN]
+        await close(runtime, p)
+
+    asyncio.run(scenario())
